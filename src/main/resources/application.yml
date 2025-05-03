@@ -1,0 +1,35 @@
+vendors:
+  configs:
+    murata:
+      base-url: https://www.murata.com
+      mpn-search-path: /webapi/PsdispRest
+      cross-ref-url: /webapi/SearchCrossReference
+      default-cate: luCeramicCapacitorsSMD
+      cross-ref-default-cate: cgInductorscrossreference
+      categories:                                           # prefix → “cate” code
+        GRM: luCeramicCapacitorsSMD
+        GCM: luCeramicCapacitorsSMD
+        LQH: luInductorSMD
+        LQM: luInductorChip
+        LQW: luInductorWirewound
+        BLM: luEMIFiltersSMD
+        PKL: luPiezoSoundComponents
+        NFM: luEMIPiFiltersSMD
+      cross-ref-categories:        # prefix    → cate code
+        LQH: cgInductorscrossreference
+        LQM: cgInductorscrossreference
+        LQW: cgInductorscrossreference
+        GRM: cgCapacitorscrossreference
+        GCM: cgCapacitorscrossreference
+        BLM: cgEmifilterscrossreference
+    tdk:
+      base-url: https://product.tdk.com
+      mpn-search-path: /en/search/productsearch
+      cross-ref-url: https://product.tdk.com/crossreference
+
+logging:
+  level:
+    root: INFO
+    org.springframework.cache: debug
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
