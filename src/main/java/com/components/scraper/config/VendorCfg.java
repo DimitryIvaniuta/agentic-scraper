@@ -14,6 +14,7 @@ public class VendorCfg {
     private String crossRefUrl;
     private String defaultCate;
     private String crossRefDefaultCate;
+    private String parametricSearchUrl;
     private Map<String, String> categories = new HashMap<>();
     private Map<String, String> crossRefCategories = new HashMap<>();
 }

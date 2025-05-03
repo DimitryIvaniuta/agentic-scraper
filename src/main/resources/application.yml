@@ -4,6 +4,7 @@ vendors:
       base-url: https://www.murata.com
       mpn-search-path: /webapi/PsdispRest
       cross-ref-url: /webapi/SearchCrossReference
+      parametric-search-url: /webapi/GetSearchCondition
       default-cate: luCeramicCapacitorsSMD
       cross-ref-default-cate: cgInductorscrossreference
       categories:                                           # prefix → “cate” code
