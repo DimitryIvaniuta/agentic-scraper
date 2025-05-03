@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -15,6 +16,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -32,29 +34,33 @@ public class MurataHttpCrossReferenceSearchService  extends VendorHttpSearchEngi
     }
 
     @Override
-    public List<Map<String,Object>> searchByCrossReference(String competitorMpn,
-                                                           List<String> unused) {
+    public Map<String, List<Map<String, Object>>> searchByCrossReference(String competitorMpn,
+                                                           List<String> categories) {
 
-        String cate   = cateForCrossRef(competitorMpn);
-
-
+        String cleaned = competitorMpn.replace("#", "").trim();
+        String cate   = categories.isEmpty()?cateForCrossRef(competitorMpn):categories.getFirst();
+/*
         URI uri = UriComponentsBuilder
                 .fromUriString(props.require("murata").baseUrl())
                 .path(props.require("murata").crossRefPath())
                 .queryParam("cate",   cate)
                 .queryParam("partno", prefix)
                 .build()
-                .toUri();
+                .toUri();*/
 
-        log.debug("Murata X‑Ref GET {}", uri);
+//        log.debug("Murata X‑Ref GET {}", uri);
 
-        String json = wc.get()
-                .uri(uri)
+        String body = getClient().get()
+                .uri(builder -> buildUri(builder, cate, cleaned))   // ← lambda
                 .retrieve()
                 .bodyToMono(String.class)
-                .block(Duration.ofSeconds(10));   // simple blocking call
+                .block(Duration.ofSeconds(10));
+        if (StringUtils.isBlank(body)) {
+            log.warn("Empty response for {}", cleaned);
+            return Collections.emptyMap();
+        }
 
-        return parseJson(json);
+        return parseCrossRefJson(body);
     }
 
     private java.net.URI buildUri(UriBuilder ub, Object... args) {

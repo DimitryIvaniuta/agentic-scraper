@@ -19,8 +19,10 @@ import java.util.Optional;
 
 import com.components.scraper.config.VendorCfg;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import org.apache.commons.lang3.StringUtils;
 import org.jsoup.nodes.Element;
+import org.jsoup.safety.Safelist;
 import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
@@ -116,7 +118,7 @@ public abstract class VendorHttpSearchEngine {
                 + " does not implement parametric search");
     }
 
-    public List<Map<String, Object>> searchByCrossReference(
+    public Map<String, List<Map<String, Object>>> searchByCrossReference(
             String competitorMpn, List<String> categoryPath) {
         throw new UnsupportedOperationException(getClass().getSimpleName()
                 + " does not implement X-Ref search");
@@ -340,6 +342,76 @@ public abstract class VendorHttpSearchEngine {
             return List.of();
         }
     }
+
+    protected Map<String, List<Map<String, Object>>> parseCrossRefJson(String rawJson) {
+        JsonNode root;
+        try {
+            root = getMapper().readTree(rawJson);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Malformed JSON returned by Murata API", ex);
+        }
+
+        Map<String, List<Map<String, Object>>> out = new LinkedHashMap<>(2);
+        out.put("competitor", parseSection(root, "otherPsDispRest"));
+        out.put("murata",      parseSection(root, "murataPsDispRest"));
+        return out;
+    }
+
+// ----------------------- inside VendorHttpSearchEngine -----------------------
+
+    private List<Map<String, Object>> parseSection(JsonNode root, String key) {
+
+        JsonNode result = Optional.ofNullable(root.get(key))
+                .map(n -> n.get("Result"))
+                .orElse(null);
+
+        if (result == null || !result.has("data")) {
+            return List.of();                         // nothing to parse
+        }
+        boolean isMurataSection = "murataPsDispRest".equals(key);
+
+        /* ---------- 1️⃣  build header list (human‑readable captions) ---------- */
+        List<String> headers = new ArrayList<>();
+        for (JsonNode h : result.withArray("header")) {       // <- NO CAST ✔
+            String[] parts = h.asText().split(":", 3);
+            headers.add(parts.length > 1 ? parts[1].trim() : parts[0].trim());
+        }
+
+        /* ---------- 2️⃣  build rows ------------------------------------------ */
+        List<Map<String, Object>> rows = new ArrayList<>();
+
+        String partNumber = null;
+        ArrayNode products = result.path("data").withArray("products");
+        for (JsonNode prod : products) {
+
+            ArrayNode values = prod.withArray("Value");
+            Map<String, Object> row = new LinkedHashMap<>();
+
+            for (int i = 0; i < Math.min(headers.size(), values.size()); i++) {
+                String caption = headers.get(i);
+                String raw     = values.get(i).asText();
+                String clean   = Jsoup
+                        .parse(raw.replace("<br/>", " "))   // quick & safe clean‑up
+                        .text()
+                        .trim();
+
+                if (!clean.isEmpty()){
+                    row.put(caption, clean);
+                    if ("Part Number".equals(caption)) {
+                        partNumber = clean.replace("#", "");        // strip trailing '#'
+                    }
+                }
+            }
+            if (isMurataSection && partNumber != null) {
+                row.put("url",
+                        "https://www.murata.com/en-us/products/productdetail?partno="
+                                + partNumber + "%23");
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
 
     /* ---------- HTML -------------------------------------------------- */
 
