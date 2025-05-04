@@ -1,16 +1,23 @@
 package com.components.scraper.service.core;
 
 import com.components.scraper.config.VendorCfg;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.UnknownContentTypeException;
@@ -42,10 +49,14 @@ import java.util.*;
 @RequiredArgsConstructor
 public abstract class VendorSearchEngine {
 
-    /** Immutable vendor‑level configuration (URLs, mapping tables …). */
+    /**
+     * Immutable vendor‑level configuration (URLs, mapping tables …).
+     */
     private final VendorCfg cfg;
 
-    /** Pre‑configured synchronous RestClient (WireMock or live). */
+    /**
+     * Pre‑configured synchronous RestClient (WireMock or live).
+     */
     protected final org.springframework.web.client.RestClient client;
 
     /* ------------------------------------------------------------------ */
@@ -57,9 +68,7 @@ public abstract class VendorSearchEngine {
      *
      * @param uriFn function that receives a Spring {@link UriBuilder}
      *              and returns a fully‑built {@link URI}
-     *
      * @return root JSON node (may be {@code null} if 204/404)
-     *
      * @throws IllegalStateException if a non‑2xx was received or JSON could
      *                               not be parsed.
      */
@@ -69,17 +78,30 @@ public abstract class VendorSearchEngine {
                     .uri(uriFn)
                     .retrieve()
                     .body(JsonNode.class);
-        }
-        catch (HttpStatusCodeException ex) {
+        } catch (HttpServerErrorException ex) {
             HttpStatusCode s = ex.getStatusCode();
-            log.warn("{} GET {} → {}", getCfg().getBaseUrl(),
-                    ex.getResponseHeaders() == null ? "" : ex.getResponseHeaders().getLocation(),
-                    s);
+            log.warn("Upstream {} returned {}: {} → returning empty JSON",
+                    cfg.getBaseUrl(),
+                    ex.getStatusCode(),
+                    ex.getResponseBodyAsString()
+            );
+//            log.warn("{} GET {} → {}", getCfg().getBaseUrl(),
+//                    ex.getResponseHeaders() == null ? "" : ex.getResponseHeaders().getLocation(),
+//                    s);
             if (s.is4xxClientError()) return null;           // 404 … treat as “no data”
             throw new IllegalStateException("HTTP " + s, ex);
         }
+/*        catch (HttpMessageConversionException je) {
+            return null;
+        }
         catch (RestClientException ex) {
             throw new IllegalStateException("Cannot fetch/parse remote JSON", ex);
+        }*/
+        catch (Exception ex) {
+            // any other I/O or mapping errors
+            log.error("safeGet failed for {} → returning empty JSON",
+                    uriFn, ex);
+            return JsonNodeFactory.instance.objectNode();
         }
     }
 
@@ -124,20 +146,22 @@ public abstract class VendorSearchEngine {
             return defaultCateOrFail();
 
         String prefix = partNo.substring(0, 3).toUpperCase(Locale.ROOT);
-        String cate   = getCfg().getCategories().get(prefix);
+        String cate = getCfg().getCategories().get(prefix);
 
         return cate != null ? cate : defaultCateOrFail();
     }
 
-    /** Dedicated helper for Murata cross‑reference look‑ups. */
+    /**
+     * Dedicated helper for Murata cross‑reference look‑ups.
+     */
     public String cateForCrossRef(String competitorPn) {
 
         String sanitized = competitorPn.replaceAll("[^A-Z0-9]", "");
-        String prefix    = sanitized.length() >= 3
+        String prefix = sanitized.length() >= 3
                 ? sanitized.substring(0, 3).toUpperCase(Locale.ROOT)
                 : sanitized.toUpperCase(Locale.ROOT);
 
-        Map<String,String> xref = getCfg().getCrossRefCategories();
+        Map<String, String> xref = getCfg().getCrossRefCategories();
         String cate = (xref != null) ? xref.get(prefix) : null;
 
         return (cate != null ? cate : getCfg().getCrossRefDefaultCate());

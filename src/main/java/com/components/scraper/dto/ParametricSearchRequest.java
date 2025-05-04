@@ -12,9 +12,6 @@ import java.util.Map;
 public class ParametricSearchRequest {
 
     @NotBlank
-    private String vendor;
-
-    @NotBlank
     private String category;
 
     private String subcategory;

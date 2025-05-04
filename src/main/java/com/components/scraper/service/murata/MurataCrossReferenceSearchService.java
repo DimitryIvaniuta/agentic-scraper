@@ -101,6 +101,8 @@ public class MurataCrossReferenceSearchService
                     .queryParam("cate",   cate)
                     .queryParam("partno", competitorMpnFixed)
                     .queryParam("stype",  1)
+                    .queryParam("pageno",  1)
+                    .queryParam("rows",  200)
                     .queryParam("lang",   "en-us")
                     .build();
         });

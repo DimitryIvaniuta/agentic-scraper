@@ -1,13 +1,14 @@
 package com.components.scraper.service.murata;
 
+import com.components.scraper.config.VendorCfg;
 import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.MpnSearchService;
 import com.components.scraper.service.core.ParametricSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
-import jakarta.annotation.Nonnull;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
@@ -25,23 +26,24 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * <h2>MurataHttpParametricSearchService</h2>
+ * <h2>Murata – Parametric search</h2>
  *
- * <p>Pure‑HTTP implementation of Murata’s <em>parametric / filter</em> search.
- * The service mimics the calls the public Murata product finder performs:
- * it hits the <b>{@code /webapi/PsdispRest}</b> end‑point, decodes the JSON
- * grid and returns a canonical list of result maps.</p>
+ * <p>Calls <code>/webapi/PsdispRest</code> directly (no Selenium) and turns the
+ * JSON “grid” response into a list&nbsp;of {@code Map&lt;String,Object&gt;}
+ * where keys are the human‑readable column titles.</p>
  *
- * <p>All Murata‑specific quirks (base URL, {@code cate} mapping, header
- * semantics) are injected through Murata while the
- * grid‑to‑POJO conversion is delegated to {@link JsonGridParser}
- * (provider‑specific implementation).</p>
- *
- * <p>The class is <b>thread‑safe</b>; no mutable state is stored between
- * calls.</p>
+ * <p>The service supports:</p>
+ * <ul>
+ *   <li>automatic <code>cate</code> lookup from MPN prefix,</li>
+ *   <li>unlimited parameter filters via the Murata <code>scon</code> syntax,</li>
+ *   <li>row limiting (<code>rows</code>) and server‑side sorting.</li>
+ * </ul>
  */
 @Slf4j
 @Service("murataParamSvc")
@@ -61,30 +63,38 @@ public class MurataHttpParametricSearchService
 
     /**
      * {@inheritDoc}
+     *
+     * <p>Expected <u>parameters</u> map shapes:</p>
+     * <pre>
+     *  "capacitance"                 : 10                      // single value
+     *  "ratedVoltageDC"              : { "min": 100, "max": 200 }
+     *  "characteristic"              : ["C0G", "X7R"]          // multi‑select
+     * </pre>
      */
     @Override
     public List<Map<String, Object>> searchByParameters(
             @NonNull String category,
             @Nullable String subcategory,
             @Nullable Map<String, Object> parameters,
-            int        maxResults
+            int maxResults
 
     ) {
 
         // 1) Resolve cate code from category path
         String cate = resolveCate(category, subcategory);
+        String partNo = StringUtils.defaultString(subcategory);
 
-        MultiValueMap<String, String> q = buildQueryParams(cate, parameters);
+//        MultiValueMap<String, String> q = buildQueryParams(cate, parameters);
 
-        JsonNode root = safeGet(ub -> buildUri(
-                getCfg().getBaseUrl(),
-                getCfg().getParametricSearchUrl(),
-                q));
-
+//        JsonNode root = safeGet(ub -> buildUri(
+//                getCfg().getBaseUrl(),
+//                getCfg().getParametricSearchUrl(),
+//                q));
+        JsonNode root = safeGet(uriBuilder(cate, partNo, parameters, maxResults));
         if (root == null) return List.of();
 
         // 5) Parse Murata grid
-        List<Map<String, Object>> rows = parser.parse(root.path("Result"));
+        List<Map<String, Object>> rows = parser.parse(root);//.path("Result")
 
         // 6) Respect maxResults and return
         return rows.size() > maxResults
@@ -92,28 +102,23 @@ public class MurataHttpParametricSearchService
                 : rows;
     }
 
-
-    /* ================================================================== */
-    /*  helpers                                                           */
-    /* ================================================================== */
-
     /** Compose endpoint URI. */
-    private URI buildUri(String cate, String scon, int rows) {
-
-        UriBuilder ub = UriComponentsBuilder
-                .fromUriString(getCfg().getBaseUrl())          // e.g. https://www.murata.com
-                .path(getCfg().getParametricSearchUrl());           // e.g. /webapi/PsdispRest
-
-        MultiValueMap<String,String> qp = new LinkedMultiValueMap<>();
-        qp.add("cate",  cate);
-        qp.add("partno","");         // blank = no direct MPN restriction
-        qp.add("stype", "1");
-        if (!scon.isBlank()) qp.add("scon", scon);
-        qp.add("lang",  "en-us");
-        qp.add("rows",  String.valueOf(rows));
-
-        return ub.queryParams(qp).build(true);    // ‘true’ → skip encoding (%7C already OK)
-    }
+//    private URI buildUri(String cate, String scon, int rows) {
+//
+//        UriBuilder ub = UriComponentsBuilder
+//                .fromUriString(getCfg().getBaseUrl())          // e.g. https://www.murata.com
+//                .path(getCfg().getParametricSearchUrl());           // e.g. /webapi/PsdispRest
+//
+//        MultiValueMap<String,String> qp = new LinkedMultiValueMap<>();
+//        qp.add("cate",  cate);
+//        qp.add("partno","");         // blank = no direct MPN restriction
+//        qp.add("stype", "1");
+//        if (!scon.isBlank()) qp.add("scon", scon);
+//        qp.add("lang",  "en-us");
+//        qp.add("rows",  String.valueOf(rows));
+//
+//        return ub.queryParams(qp).build(true);    // ‘true’ → skip encoding (%7C already OK)
+//    }
 
 
     /**
@@ -124,10 +129,11 @@ public class MurataHttpParametricSearchService
     buildQueryParams(String cate, @Nullable Map<String, Object> filters) {
 
         var q = new LinkedMultiValueMap<String, String>();
-        q.add("cate",  cate);
+        q.add("cate", cate);
         q.add("partno", "");          // empty string means “parametric mode”
         q.add("stype", "1");
-        q.add("lang",  "en-us");
+        q.add("rows", "100");
+        q.add("lang", "en-us");
 
         if (filters != null && !filters.isEmpty()) {
             String scon = toScon(cate, filters);
@@ -157,23 +163,27 @@ public class MurataHttpParametricSearchService
                 .collect(Collectors.joining("|"));
     }
 
-    /** encode single k‑v in Murata format */
+    /**
+     * encode single k‑v in Murata format
+     */
     private String encodeOne(String prefix, String param, Object v) {
 
         List<String> values = switch (v) {
-            case Map<?,?> m   -> encodeRange(m);
+            case Map<?, ?> m -> encodeRange(m);
             case Collection<?> c -> c.stream()
                     .map(Object::toString)
                     .toList();
-            default            -> List.of(v.toString());
+            default -> List.of(v.toString());
         };
 
         String joined = String.join("%7C", values);   // “|” must be kept escaped
         return (prefix + "-" + param + ";" + joined);
     }
 
-    /** helper for {"min":x,"max":y} maps */
-    private List<String> encodeRange(Map<?,?> m) {
+    /**
+     * helper for {"min":x,"max":y} maps
+     */
+    private List<String> encodeRange(Map<?, ?> m) {
 
         Object min = m.get("min");
         Object max = m.get("max");
@@ -196,32 +206,34 @@ public class MurataHttpParametricSearchService
      * </ul>
      * Multiple filters are concatenated with {@code &}.
      */
-    private String encodeFilters(Map<String, Object> params) {
-        if (params == null || params.isEmpty()) return "";
+//    private String encodeFilters(Map<String, Object> params) {
+//        if (params == null || params.isEmpty()) return "";
+//
+//        List<String> terms = new ArrayList<>();
+//
+//        params.forEach((key, raw) -> {
+//            if (raw instanceof Map<?,?> rng) {
+//                Object min = rng.get("min");
+//                Object max = rng.get("max");
+//                terms.add(key + ";" + min + "|" + max);
+//            }
+//            else if (raw instanceof Collection<?> col) {
+//                String joined = String.join("|",
+//                        col.stream().map(Object::toString).toList());
+//                terms.add(key + ";" + joined);
+//            }
+//            else {
+//                terms.add(key + ";" + raw);
+//            }
+//        });
+//        return String.join("&", terms);
+//    }
 
-        List<String> terms = new ArrayList<>();
-
-        params.forEach((key, raw) -> {
-            if (raw instanceof Map<?,?> rng) {
-                Object min = rng.get("min");
-                Object max = rng.get("max");
-                terms.add(key + ";" + min + "|" + max);
-            }
-            else if (raw instanceof Collection<?> col) {
-                String joined = String.join("|",
-                        col.stream().map(Object::toString).toList());
-                terms.add(key + ";" + joined);
-            }
-            else {
-                terms.add(key + ";" + raw);
-            }
-        });
-        return String.join("&", terms);
-    }
-
-    /** Resolve <i>cate</i> code via YAML mapping – falls back to default. */
+    /**
+     * Resolve <i>cate</i> code via YAML mapping – falls back to default.
+     */
     private String resolveCate(String category, String sub) {
-        Map<String,String> map = getCfg().getCategories();
+        Map<String, String> map = getCfg().getCategories();
         if (map == null || map.isEmpty()) return getCfg().getDefaultCate();
 
         String path = (category + (sub == null ? "" : "/" + sub)).toUpperCase(Locale.ROOT);
@@ -234,4 +246,105 @@ public class MurataHttpParametricSearchService
                 .map(map::get)
                 .orElse(getCfg().getDefaultCate());
     }
+
+    /**
+     * As Murata repeats {@code scon=} for every filter, we must build an URI
+     * with multiple identical query‑parameter keys.  This helper returns an
+     * {@link UriBuilder}‑&gt;{@link URI} lambda ready for {@code RestClient}.
+     */
+    private Function<UriBuilder, URI> uriBuilder(String cate,
+                                                 String partno,
+                                                 Map<String, Object> params,
+                                                 int rows) {
+
+        return ub -> {
+
+            URI base = URI.create(getCfg().getBaseUrl());   // e.g. https://www.murata.com
+
+            // apply scheme + host (and port if present)
+            ub = ub.scheme(base.getScheme())
+                    .host(base.getHost());
+            if (base.getPort() != -1) {                     // port is -1 when absent
+                ub = ub.port(base.getPort());
+            }
+
+            // prepend any path segment that is already part of base‑url
+            String basePath = base.getPath();
+            if (org.springframework.util.StringUtils.hasText(basePath) && !"/".equals(basePath)) {
+                ub = ub.path(basePath);                     // e.g. "" or "/"
+            }
+
+            UriBuilder b = ub
+//                    .scheme("https")
+//                    .host(getCfg().getBaseUrl())                // e.g. www.murata.com
+                    .path(getCfg().getParametricSearchUrl())    // usually /webapi/PsdispRest
+                    .queryParam("cate", cate)
+                    .queryParam("partno", partno)
+                    .queryParam("stype", 1)
+                    .queryParam("rows", rows)
+//                    .queryParam("sort", "d_lengthdisp")
+                    .queryParam("lang", "en-us");
+
+            /* add one “scon” parameter per filter */
+            params.forEach((key, value) -> renderScon(key, value)
+                    .forEach(s -> b.queryParam("scon", s)));
+
+            return b.build();
+        };
+    }
+
+    /**
+     * Build one “scon=” clause.
+     *
+     * <pre>
+     *   • single value            -> field;10|10
+     *   • range  {"min":x,"max":y}-> field;x|y
+     *   • list   [a,b,c]          -> field;a,b,c
+     * </pre>
+     * <p>
+     * Murata does not care which order the scon parameters appear in, it just OR‑s
+     * them together.  So caller can concatenate the list with ‘&’.
+     */
+    private List<String> renderScon(String field, Object raw) {
+
+        var sb = new StringBuilder(field).append(';');
+
+        /* ---------- single literal ------------------------------------------------ */
+        if (raw instanceof CharSequence || raw instanceof Number) {
+//            return List.of(sb.append(raw).append('|').append(raw).toString());
+            return List.of(sb.append(raw).toString());
+        }
+
+        /* ---------- range {min,max} ------------------------------------------------ */
+        if (raw instanceof Map<?, ?> range) {                 // we already know the shape
+            // ← explicit, safe cast
+
+            String min = Optional.ofNullable(range.get("min"))
+                    .map(Object::toString)
+                    .orElse("");
+
+            String max = Optional.ofNullable(range.get("max"))
+                    .map(Object::toString)
+                    .orElse("");
+
+            return List.of(sb.append(min).append('|').append(max).toString());
+        }
+
+        /* ---------- multi‑value list ---------------------------------------------- */
+//        if (raw instanceof Collection<?>) {
+//            String joined = ((Collection<?>) raw).stream()
+//                    .map(Object::toString)
+//                    .collect(Collectors.joining(","));
+//            return sb.append(joined).toString();
+//        }
+        if (raw instanceof Collection<?> col) {
+            return col.stream()
+                    .map(val -> field + ';' + val)
+                    .toList();
+        }
+        throw new IllegalArgumentException(
+                "Unsupported parameter value for scon: " + raw.getClass());
+    }
+
+
 }

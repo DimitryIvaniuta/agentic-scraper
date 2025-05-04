@@ -29,7 +29,7 @@ import java.util.*;
  *   "maxResults" : 50                        // optional – defaults to 100
  * }
  * </pre>
- *
+ * <p>
  * Response – 200 OK:
  * <pre>
  * [
@@ -50,20 +50,21 @@ public class ParametricSearchController {
      * injected here automatically; the map key equals the Spring bean‑name.
      * <p>
      * Example:  "murataHttpParametricSearchService" ⇒ bean instance
-     *            "tdkHttpParametricSearchService"    ⇒ bean instance
+     * "tdkHttpParametricSearchService"    ⇒ bean instance
      */
     private final Map<String, ParametricSearchService> parametricServices;
 
     /* --------------------------------------------------- endpoint ---- */
 
     @PostMapping
-    public ResponseEntity<List<Map<String, Object>>> searchByParameters(@Valid @RequestBody ParametricSearchRequest dto) {
-
-        String vendorKey = resolveVendorKey(dto.getVendor());
+    public ResponseEntity<List<Map<String, Object>>> searchByParameters(
+            @RequestParam("vendor") String vendor,
+            @Valid @RequestBody ParametricSearchRequest dto) {
+        String vendorKey = resolveVendorKey(vendor);
         ParametricSearchService svc = Optional
                 .ofNullable(parametricServices.get(vendorKey))
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "No parametric search service for vendor: " + dto.getVendor()));
+                        "No parametric search service for vendor: " + vendor));
 
         List<Map<String, Object>> rows = svc.searchByParameters(
                 dto.getCategory(),
@@ -80,11 +81,11 @@ public class ParametricSearchController {
      */
     private String resolveVendorKey(String vendor) {
         String v = (StringUtils.hasText(vendor) ? vendor : "murata").toLowerCase();
-        return v + "HttpParametricSearchService";
+        return v + "ParamSvc";
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException ex) {
+    public ResponseEntity<Map<String, String>> handleBadRequest(IllegalArgumentException ex) {
         log.warn("Bad request: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("error", ex.getMessage()));
