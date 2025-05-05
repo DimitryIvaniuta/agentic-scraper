@@ -1,5 +1,6 @@
 package com.components.scraper.service.murata;
 
+import com.components.scraper.ai.LLMHelper;
 import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
@@ -64,9 +65,10 @@ public class MurataParametricSearchService
     public MurataParametricSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
-            final RestClient client
+            final RestClient client,
+            final LLMHelper llmHelper
     ) {
-        super(factory.forVendor("murata"), client);
+        super(factory.forVendor("murata"), client, llmHelper);
         this.parser = parser;
     }
 

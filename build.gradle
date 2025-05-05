@@ -9,6 +9,7 @@ version = '0.1.0'
 sourceCompatibility = '21'
 
 def lombokVersion = '1.18.38'
+def resilience4jVersion = '2.3.0'
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
@@ -19,15 +20,25 @@ repositories {
 }
 
 dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.4.5'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
-    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-validation:3.4.5'
     implementation 'org.apache.commons:commons-compress:1.27.1'
     implementation 'org.apache.commons:commons-lang3:3.17.0'
     // HTML parsing with Jsoup
     implementation 'org.jsoup:jsoup:1.20.1'
 
-    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'io.github.cdimascio:dotenv-java:3.2.0'
+
+    implementation 'org.springframework.boot:spring-boot-starter-webflux:3.4.5'
+
+    // if you’re using Spring-Boot + Resilience4j you’ll typically have:
+    implementation "io.github.resilience4j:resilience4j-spring-boot2:${resilience4jVersion}"
+    implementation "io.github.resilience4j:resilience4j-reactor:${resilience4jVersion}"
+    implementation "io.github.resilience4j:resilience4j-retry:${resilience4jVersion}"
+
+    // <-- this one brings in the Decorators class
+    implementation "io.github.resilience4j:resilience4j-all:${resilience4jVersion}"
 
     // Lombok
     compileOnly("org.projectlombok:lombok:${lombokVersion}")
@@ -37,7 +48,7 @@ dependencies {
     testCompileOnly("org.projectlombok:lombok:${lombokVersion}")
     testAnnotationProcessor("org.projectlombok:lombok:${lombokVersion}")
 
-    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test:3.4.5'
     testImplementation 'org.testcontainers:junit-jupiter:1.21.0'
 
 }

@@ -1,5 +1,6 @@
 package com.components.scraper.service.murata;
 
+import com.components.scraper.ai.LLMHelper;
 import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.VendorSearchEngine;
@@ -50,20 +51,21 @@ public class MurataMpnSearchService
      */
     private final JsonGridParser parser;
 
-
     /**
      * Constructs the Murata MPN search service.
      *
-     * @param parser  JSON-grid parser bean qualified as "murataGridParser"
-     * @param factory factory for loading Murata vendor configuration
-     * @param client  configured {@link RestClient} for HTTP calls
+     * @param parser    JSON-grid parser bean qualified as "murataGridParser"
+     * @param factory   factory for loading Murata vendor configuration
+     * @param client    configured {@link RestClient} for HTTP calls
+     * @param llmHelper LLMHelper to ask ChatGPT for the vendor’s real “cate” code
      */
     public MurataMpnSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
-            final RestClient client
+            final RestClient client,
+            final LLMHelper llmHelper
     ) {
-        super(factory.forVendor("murata"), client);
+        super(factory.forVendor("murata"), client, llmHelper);
         this.parser = parser;
     }
 
@@ -74,6 +76,13 @@ public class MurataMpnSearchService
      * Builds and executes a GET request to Murata’s MPN lookup endpoint,
      * then parses the returned JSON grid into a list of specification maps.
      * </p>
+     * <p>This implementation will:</p>
+     * <ol>
+     *   <li>Ask the LLM (via {@link LLMHelper}) for Murata’s true <code>cate</code> code</li>
+     *   <li>If the LLM returns a non‐empty list, take its last element as <code>cate</code></li>
+     *   <li>Otherwise fall back to {@link #cateFromPartNo(String)}</li>
+     *   <li>Call the Murata JSON endpoint and parse the result grid</li>
+     * </ol>
      *
      * @param mpn the manufacturer part number (e.g. "GRM0115C1C100GE01")
      * @return a list of maps where each map represents one matching product
@@ -84,7 +93,12 @@ public class MurataMpnSearchService
     @Override
     public List<Map<String, Object>> searchByMpn(final String mpn) {
         // Determine the Murata category code based on the MPN prefix
-        String cate = cateFromPartNo(mpn);
+//        String cate = cateFromPartNo(mpn);
+        // step 1: try AI lookup
+        String cate = llmHelper.determineCate(mpn, this::cateFromPartNo);
+//        String cate = (!aiCats.isEmpty())
+//                ? aiCats.getLast()
+//                : cateFromPartNo(mpn);
 
         // Clean the MPN string (trim whitespace, leave trailing "#" if present)
         String cleaned = mpn.trim();

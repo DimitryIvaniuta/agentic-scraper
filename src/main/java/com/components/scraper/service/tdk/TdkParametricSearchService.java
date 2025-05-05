@@ -1,12 +1,15 @@
 package com.components.scraper.service.tdk;
 
+import com.components.scraper.ai.LLMHelper;
 import com.components.scraper.config.VendorCfg;
+import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
@@ -49,13 +52,16 @@ public class TdkParametricSearchService
         extends VendorSearchEngine
         implements ParametricSearchService {
 
-    private final JsonGridParser gridParser;
+    private final JsonGridParser parser;
 
-    public TdkParametricSearchService(VendorCfg cfg,
-                                      RestClient client,
-                                      JsonGridParser gridParser) {
-        super(cfg, client);
-        this.gridParser = gridParser;
+    public TdkParametricSearchService(
+            @Qualifier("tdkGridParser") final JsonGridParser parser,
+            final VendorConfigFactory factory,
+            final RestClient client,
+            final LLMHelper llmHelper
+    ) {
+        super(factory.forVendor("tdk"), client, llmHelper);
+        this.parser = parser;
     }
 
     /**
@@ -76,7 +82,7 @@ public class TdkParametricSearchService
 
         if (root == null) return List.of();
 
-        List<Map<String, Object>> rows = gridParser.parse(root);
+        List<Map<String, Object>> rows = parser.parse(root);
 
         return rows.size() > maxResults
                 ? rows.subList(0, maxResults)

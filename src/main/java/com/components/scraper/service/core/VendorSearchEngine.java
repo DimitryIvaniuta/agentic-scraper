@@ -1,5 +1,6 @@
 package com.components.scraper.service.core;
 
+import com.components.scraper.ai.LLMHelper;
 import com.components.scraper.config.VendorCfg;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -56,6 +57,11 @@ public abstract class VendorSearchEngine {
      * Pre‑configured synchronous RestClient instance for executing HTTP requests..
      */
     protected final org.springframework.web.client.RestClient client;
+
+    /**
+     * LLMHelper to ask ChatGPT for the vendor’s real “cate” code
+     */
+    protected final LLMHelper llmHelper;
 
     /**
      * Performs an HTTP GET to the URI produced by {@code uriFn}, returning
