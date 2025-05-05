@@ -14,50 +14,99 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * <p>
+ * HTTP-based implementation of {@link MpnSearchService} for Murata Electronics.
+ * Uses the Murata <code>/webapi/PsdispRest</code> endpoint to look up
+ * manufacturer part numbers (MPNs) and returns a list of product records
+ * with their associated specifications.
+ * </p>
+ *
+ * <p><strong>Workflow:</strong></p>
+ * <ol>
+ *   <li>Determine the Murata category code from the MPN prefix via {@link VendorSearchEngine#cateFromPartNo(String)}</li>
+ *   <li>Construct a fully-qualified URI using the vendor’s base URL and MPN search path</li>
+ *   <li>Perform an HTTP GET via {@link VendorSearchEngine#safeGet(java.util.function.Function)}</li>
+ *   <li>Parse the returned JSON grid into a list of maps using the injected {@link JsonGridParser}</li>
+ * </ol>
+ *
+ * <p>
+ * Example request URI:
+ * <pre>
+ *   <a href="https://www.murata.com/webapi/PsdispRest?cate=luCeramicCapacitorsSMD&amp;partno=GRM0115C1C100&amp;stype=1&amp;lang=en-us">
+ *     https://www.murata.com/webapi/PsdispRest
+ *   </a>
+ * </pre>
+ * </p>
+ *
+ */
 @Service("murataMpnSvc")
 public class MurataMpnSearchService
         extends VendorSearchEngine implements MpnSearchService {
 
+    /**
+     * Parser that converts the Murata JSON grid into
+     * {@code List<Map<String,Object>>}.
+     */
     private final JsonGridParser parser;
 
+
+    /**
+     * Constructs the Murata MPN search service.
+     *
+     * @param parser  JSON-grid parser bean qualified as "murataGridParser"
+     * @param factory factory for loading Murata vendor configuration
+     * @param client  configured {@link RestClient} for HTTP calls
+     */
     public MurataMpnSearchService(
-            @Qualifier("murataGridParser") JsonGridParser parser,
-            VendorConfigFactory factory,
-            RestClient client
+            @Qualifier("murataGridParser") final JsonGridParser parser,
+            final VendorConfigFactory factory,
+            final RestClient client
     ) {
         super(factory.forVendor("murata"), client);
         this.parser = parser;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * Builds and executes a GET request to Murata’s MPN lookup endpoint,
+     * then parses the returned JSON grid into a list of specification maps.
+     * </p>
+     *
+     * @param mpn the manufacturer part number (e.g. "GRM0115C1C100GE01")
+     * @return a list of maps where each map represents one matching product
+     *         record; each key is a human-readable column header, and each
+     *         value is the corresponding cell value
+     * @throws IllegalStateException if an unexpected HTTP error occurs
+     */
     @Override
-    public List<Map<String, Object>> searchByMpn(String mpn) {
+    public List<Map<String, Object>> searchByMpn(final String mpn) {
+        // Determine the Murata category code based on the MPN prefix
         String cate = cateFromPartNo(mpn);
+
+        // Clean the MPN string (trim whitespace, leave trailing "#" if present)
         String cleaned = mpn.trim();
-//        JsonNode root = safeGet(ub -> ub
-//                .scheme("https").host(getCfg().getBaseUrl())
-//                .path(getCfg().getMpnSearchPath())
-//                .queryParam("cate",   cate)
-//                .queryParam("partno", mpn)
-//                .queryParam("stype",  1)
-//                .queryParam("lang",   "en-us")
-//                .build());
+
+        // Perform the HTTP GET and parse the JSON grid
         JsonNode root = safeGet(ub -> {
             URI base = URI.create(getCfg().getBaseUrl());   // e.g. https://www.murata.com
 
-            // apply scheme + host (and port if present)
+            // Apply scheme, host, and port from the base URL
             ub = ub.scheme(base.getScheme())
                     .host(base.getHost());
             if (base.getPort() != -1) {                     // port is -1 when absent
                 ub = ub.port(base.getPort());
             }
 
-            // prepend any path segment that is already part of base‑url
+            // Prepend any existing path segment in the base URL
             String basePath = base.getPath();
             if (StringUtils.hasText(basePath) && !"/".equals(basePath)) {
                 ub = ub.path(basePath);                     // e.g. "" or "/"
             }
 
-            /* endpoint + query parameters */
+            // Build the full endpoint URI with query parameters
             return ub.path(getCfg().getMpnSearchPath())     // /webapi/PsdispRest
                     .queryParam("cate",   cate)
                     .queryParam("partno", cleaned)
@@ -65,6 +114,8 @@ public class MurataMpnSearchService
                     .queryParam("lang",   "en-us")
                     .build();
         });
+
+        // Parse the grid into a list of maps and return
         return parser.parse(root).stream().toList();
     }
 }

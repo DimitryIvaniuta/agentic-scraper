@@ -14,9 +14,11 @@ public class JacksonScraperConfig {
      * A dedicated {@link ObjectMapper} for our scraping layer.
      * <p>
      * • Has its own qualifier (<b>scraperObjectMapper</b>) so it never clashes with the
-     *   default mapper that Spring Boot auto‑configures for MVC.<br>
+     * default mapper that Spring Boot auto‑configures for MVC.<br>
      * • You can customise modules / features here without affecting the rest of
-     *   the application.
+     * the application.
+     *
+     * @return ObjectMapper for scraper
      */
     @Bean
     @Qualifier("scraperObjectMapper")          // the qualifier Spring will look for

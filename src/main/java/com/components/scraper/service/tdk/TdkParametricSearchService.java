@@ -52,22 +52,20 @@ public class TdkParametricSearchService
     private final JsonGridParser gridParser;
 
     public TdkParametricSearchService(VendorCfg cfg,
-                                          RestClient client,
-                                          JsonGridParser gridParser) {
+                                      RestClient client,
+                                      JsonGridParser gridParser) {
         super(cfg, client);
         this.gridParser = gridParser;
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Public API                                                        */
-    /* ------------------------------------------------------------------ */
-
-    /** {@inheritDoc} */
+    /**
+     * {@inheritDoc}
+     */
     @Override
-    public List<Map<String, Object>> searchByParameters(@NonNull  String category,
-                                                        @Nullable String subcategory,
-                                                        @Nullable Map<String, Object> parameters,
-                                                        int        maxResults) {
+    public List<Map<String, Object>> searchByParameters(@NonNull final String category,
+                                                        @Nullable final String subcategory,
+                                                        @Nullable final Map<String, Object> parameters,
+                                                        final int maxResults) {
 
         MultiValueMap<String, String> q = buildQueryParams(category, subcategory, parameters);
 
@@ -84,10 +82,6 @@ public class TdkParametricSearchService
                 ? rows.subList(0, maxResults)
                 : rows;
     }
-
-    /* ------------------------------------------------------------------ */
-    /*  helpers                                                           */
-    /* ------------------------------------------------------------------ */
 
     /**
      * Assemble TDK query parameters.
@@ -121,9 +115,9 @@ public class TdkParametricSearchService
         return q;
     }
 
-    /* ------------------------------------------------------------------ */
-
-    /** Encode caller‑friendly filter map into TDK’s <code>fn</code> string. */
+    /**
+     * Encode caller‑friendly filter map into TDK’s <code>fn</code> string.
+     */
     private String encodeFilters(Map<String, Object> filters) {
 
         return filters.entrySet().stream()
@@ -131,22 +125,23 @@ public class TdkParametricSearchService
                 .collect(Collectors.joining("|"));
     }
 
-    /** Encode a single parameter */
+    /**
+     * Encode a single parameter
+     */
     private String encodeOne(String name, Object rawVal) {
 
         String encodedValues;
 
         switch (rawVal) {
-            case Map<?,?> m -> {
+            case Map<?, ?> m -> {
                 String min = Objects.toString(m.get("min"), "");
                 String max = Objects.toString(m.get("max"), "");
                 encodedValues = min + "-" + max;        // “‑” separator
             }
-            case Collection<?> c -> {
-                encodedValues = c.stream()
-                        .map(Object::toString)
-                        .collect(Collectors.joining(","));
-            }
+            case Collection<?> c -> encodedValues = c.stream()
+                    .map(Object::toString)
+                    .collect(Collectors.joining(","));
+
             default -> encodedValues = rawVal.toString();
         }
 

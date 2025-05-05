@@ -1,33 +1,25 @@
 package com.components.scraper.service.core;
 
 import com.components.scraper.config.VendorCfg;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.HttpStatusCodeException;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.UnknownContentTypeException;
-import org.springframework.web.util.DefaultUriBuilderFactory;
 import org.springframework.web.util.UriBuilder;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
-import java.time.Duration;
-import java.util.*;
+import java.util.Locale;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.function.Function;
 
 /**
  * <h2>VendorSearchEngine</h2>
@@ -50,115 +42,124 @@ import java.util.*;
 public abstract class VendorSearchEngine {
 
     /**
-     * Immutable vendor‑level configuration (URLs, mapping tables …).
+     * Number of characters to use when extracting a part number prefix.
+     */
+    private static final int PARTNO_PREFIX_LENGTH = 3;
+
+    /**
+     * Holds vendor-specific configuration parameters such as base URL,
+     * search paths, and category mappings.
      */
     private final VendorCfg cfg;
 
     /**
-     * Pre‑configured synchronous RestClient (WireMock or live).
+     * Pre‑configured synchronous RestClient instance for executing HTTP requests..
      */
     protected final org.springframework.web.client.RestClient client;
 
-    /* ------------------------------------------------------------------ */
-    /*  HTTP helpers                                                      */
-    /* ------------------------------------------------------------------ */
-
     /**
-     * Perform <strong>GET</strong> and decode JSON into {@link JsonNode}.
+     * Performs an HTTP GET to the URI produced by {@code uriFn}, returning
+     * a {@link JsonNode} body, or an empty node/​null if safe handling
+     * of HTTP errors is needed.
      *
-     * @param uriFn function that receives a Spring {@link UriBuilder}
-     *              and returns a fully‑built {@link URI}
-     * @return root JSON node (may be {@code null} if 204/404)
-     * @throws IllegalStateException if a non‑2xx was received or JSON could
-     *                               not be parsed.
+     * @param uriFn function that builds the request URI from a {@link UriBuilder}
+     * @return parsed {@link JsonNode} response, or {@code null} for 404s,
+     * or empty object node for other I/O errors
+     * @throws IllegalStateException for 5xx error codes (unless 4xx client error)
      */
-    protected @Nullable JsonNode safeGet(@NonNull java.util.function.Function<UriBuilder, URI> uriFn) {
+    protected @Nullable JsonNode safeGet(@NonNull final Function<UriBuilder, URI> uriFn) {
         try {
             return client.get()
                     .uri(uriFn)
                     .retrieve()
                     .body(JsonNode.class);
         } catch (HttpServerErrorException ex) {
-            HttpStatusCode s = ex.getStatusCode();
             log.warn("Upstream {} returned {}: {} → returning empty JSON",
                     cfg.getBaseUrl(),
                     ex.getStatusCode(),
                     ex.getResponseBodyAsString()
             );
-//            log.warn("{} GET {} → {}", getCfg().getBaseUrl(),
-//                    ex.getResponseHeaders() == null ? "" : ex.getResponseHeaders().getLocation(),
-//                    s);
-            if (s.is4xxClientError()) return null;           // 404 … treat as “no data”
-            throw new IllegalStateException("HTTP " + s, ex);
-        }
-/*        catch (HttpMessageConversionException je) {
-            return null;
-        }
-        catch (RestClientException ex) {
-            throw new IllegalStateException("Cannot fetch/parse remote JSON", ex);
-        }*/
-        catch (Exception ex) {
+        } catch (Exception ex) {
             // any other I/O or mapping errors
             log.error("safeGet failed for {} → returning empty JSON",
                     uriFn, ex);
-            return JsonNodeFactory.instance.objectNode();
         }
+        return JsonNodeFactory.instance.objectNode();
     }
 
     /**
-     * Convenience overload for simple GET with static URI.
+     * Overload of safeGet(Function) for a prebuilt {@link URI}.
+     *
+     * @param uri the target endpoint URI
+     * @return parsed {@link JsonNode} response, or {@code null}/empty node
      */
-    protected JsonNode safeGet(@NonNull URI uri) {
+    protected JsonNode safeGet(@NonNull final URI uri) {
         return safeGet(ub -> uri);
     }
 
     /**
-     * Build a URI from base URL + path + query params (null‑safe).
+     * Constructs a {@link URI} from the given base URL, optional path, and
+     * optional query parameters map.
+     * <p>
+     * Preserves any existing encoding in the base or path segments.
+     * </p>
+     *
+     * @param base the base URL, e.g. {@code https://api.vendor.com}
+     * @param path optional path relative to {@code base}, may be null or blank
+     * @param q    optional multi-value query parameters, may be null or empty
+     * @return fully built and encoded {@link URI}
      */
-    protected URI buildUri(@NonNull String base,
-                           @Nullable String path,
-                           @Nullable MultiValueMap<String, String> q) {
+    protected URI buildUri(@NonNull final String base,
+                           @Nullable final String path,
+                           @Nullable final MultiValueMap<String, String> q) {
 
         UriComponentsBuilder b = UriComponentsBuilder.fromUriString(base);
 
-        if (StringUtils.isNotBlank(path))
+        if (StringUtils.isNotBlank(path)) {
             b.path(path.startsWith("/") ? path : "/" + path);
+        }
 
-        if (q != null && !q.isEmpty())
+        if (q != null && !q.isEmpty()) {
             b.queryParams(q);
+        }
 
         return b.build(true).toUri();   // keep already‑encoded ‘|’ etc.
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  Category helpers                                                  */
-    /* ------------------------------------------------------------------ */
-
     /**
-     * Resolve “cate” from a Murata/TDK part number prefix.
+     * Determines the vendor category code for a given part number by its
+     * three-character prefix. Falls back to the vendor’s default category
+     * if no mapping exists.
      *
-     * @throws NoSuchElementException if mapping table does not contain prefix
-     *                                <i>and</i> a default was not configured.
+     * @param partNo the full manufacturer part number (may be null/blank)
+     * @return the corresponding category code
+     * @throws NoSuchElementException if no prefix mapping or default is configured
      */
-    public String cateFromPartNo(@Nullable String partNo) {
+    public String cateFromPartNo(@Nullable final String partNo) {
 
-        if (StringUtils.isBlank(partNo) || partNo.length() < 3)
+        if (StringUtils.isBlank(partNo) || partNo.length() < PARTNO_PREFIX_LENGTH) {
             return defaultCateOrFail();
+        }
 
-        String prefix = partNo.substring(0, 3).toUpperCase(Locale.ROOT);
+        String prefix = partNo.substring(0, PARTNO_PREFIX_LENGTH).toUpperCase(Locale.ROOT);
         String cate = getCfg().getCategories().get(prefix);
 
         return cate != null ? cate : defaultCateOrFail();
     }
 
     /**
-     * Dedicated helper for Murata cross‑reference look‑ups.
+     * Determines the vendor category code for a cross-reference lookup by
+     * sanitizing the competitor part number, extracting its prefix, and
+     * mapping via {@link VendorCfg#getCrossRefCategories()}.
+     *
+     * @param competitorPn competitor part number string
+     * @return mapped cross-reference category code, or the configured default
      */
-    public String cateForCrossRef(String competitorPn) {
+    public String cateForCrossRef(final String competitorPn) {
 
         String sanitized = competitorPn.replaceAll("[^A-Z0-9]", "");
-        String prefix = sanitized.length() >= 3
-                ? sanitized.substring(0, 3).toUpperCase(Locale.ROOT)
+        String prefix = sanitized.length() >= PARTNO_PREFIX_LENGTH
+                ? sanitized.substring(0, PARTNO_PREFIX_LENGTH).toUpperCase(Locale.ROOT)
                 : sanitized.toUpperCase(Locale.ROOT);
 
         Map<String, String> xref = getCfg().getCrossRefCategories();
@@ -167,30 +168,19 @@ public abstract class VendorSearchEngine {
         return (cate != null ? cate : getCfg().getCrossRefDefaultCate());
     }
 
-    /* ------------------------------------------------------------------ */
-    /*  internals                                                         */
-    /* ------------------------------------------------------------------ */
-
+    /**
+     * Returns the configured default category code or raises an exception
+     * if none is provided.
+     *
+     * @return default category value.
+     */
     private String defaultCateOrFail() {
         String def = getCfg().getDefaultCate();
-        if (def != null) return def;
+        if (def != null) {
+            return def;
+        }
 
         throw new NoSuchElementException("No cate mapping/default for vendor "
                 + getCfg().getBaseUrl());
     }
-
-    /* ------------------------------------------------------------------ */
-    /*  timeouts (optional)                                               */
-    /* ------------------------------------------------------------------ */
-
-    /**
-     * Recommended default (can be referenced by subclasses):
-     * <pre>{@code
-     * client.get()
-     *       .uri(uri)
-     *       .retrieve()
-     *       .timeout(Duration.ofSeconds(10))
-     * }</pre>
-     */
-    protected static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
 }

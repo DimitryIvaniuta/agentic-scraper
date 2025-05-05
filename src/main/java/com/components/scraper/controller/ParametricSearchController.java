@@ -9,34 +9,56 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
 
 /**
- * REST entry‑point for parametric (specification) searches.
- * POST: /api/search/parametric
- * Request body:
- * <pre>
- * {
- *   "vendor"     : "murata",                 // optional – defaults to "murata"
- *   "category"   : "GRM",                    // main family / prefix
- *   "subcategory": null,                     // optional
- *   "parameters" : {                         // filter map (see service javadoc)
- *       "capacitance"       : {"min": 10, "max": 125},
- *       "rated_voltage_dc"  : 16
- *   },
- *   "maxResults" : 50                        // optional – defaults to 100
- * }
- * </pre>
+ * REST controller exposing an endpoint for parametric product searches.
  * <p>
- * Response – 200 OK:
- * <pre>
- * [
- *   { "Part Number" : "GRM0115C1C100GE01#", "Capacitance" : "10 pF", … },
- *   { … }
- * ]
- * </pre>
+ * Allows clients to specify a vendor, category, optional subcategory,
+ * and a set of filter parameters to retrieve matching products.
+ * </p>
+ * <p>
+ * Endpoint: <code>POST /api/search/parametric?vendor={vendor}</code><br>
+ * Consumes: <code>application/json</code><br>
+ * Produces: <code>application/json</code>
+ * </p>
+ *
+ * <h3>Request Parameters</h3>
+ * <ul>
+ *   <li><strong>vendor</strong> (query parameter, required): the vendor identifier (e.g., "murata", "tdk")</li>
+ * </ul>
+ *
+ * <h3>Request Body</h3>
+ * A JSON object matching {@link ParametricSearchRequest}, for example:
+ * <pre>{@code
+ * {
+ *   "category": "Capacitors",
+ *   "subcategory": "Ceramic",
+ *   "parameters": {
+ *     "capacitance": {"min": 10, "max": 100},
+ *     "ratedVoltageDC": [16, 25]
+ *   },
+ *   "maxResults": 50
+ * }
+ * }</pre>
+ *
+ * <h3>Response</h3>
+ * A JSON array of maps, each representing a product with its attribute–value pairs.
+ *
+ * <h3>Error Handling</h3>
+ * <ul>
+ *   <li>400 BAD REQUEST: Invalid vendor or missing/invalid request body</li>
+ * </ul>
  */
 @Slf4j
 @Validated
@@ -54,12 +76,24 @@ public class ParametricSearchController {
      */
     private final Map<String, ParametricSearchService> parametricServices;
 
-    /* --------------------------------------------------- endpoint ---- */
-
+    /**
+     * Executes a parametric search based on the provided category, subcategory, and filter parameters.
+     *
+     * @param vendor the vendor identifier (e.g., "murata", "tdk"); defaults to "murata" if blank
+     * @param dto    the request payload containing:
+     *               <ul>
+     *                 <li>{@code category} (required)</li>
+     *                 <li>{@code subcategory} (optional)</li>
+     *                 <li>{@code parameters}: map of filter names to values, ranges, or lists</li>
+     *                 <li>{@code maxResults}: maximum number of rows to return (optional)</li>
+     *               </ul>
+     * @return a {@link ResponseEntity} with HTTP 200 and a JSON array of matching product maps,
+     *         or HTTP 400 if the vendor is not supported
+     */
     @PostMapping
     public ResponseEntity<List<Map<String, Object>>> searchByParameters(
-            @RequestParam("vendor") String vendor,
-            @Valid @RequestBody ParametricSearchRequest dto) {
+            @RequestParam("vendor") final String vendor,
+            @Valid @RequestBody final ParametricSearchRequest dto) {
         String vendorKey = resolveVendorKey(vendor);
         ParametricSearchService svc = Optional
                 .ofNullable(parametricServices.get(vendorKey))
@@ -76,16 +110,24 @@ public class ParametricSearchController {
     }
 
     /**
-     * Return the bean‑name that Spring uses for the desired vendor
-     * (<code>murata</code> → <code>murataHttpParametricSearchService</code>).
+     * Normalizes the vendor string and appends the expected service bean suffix.
+     *
+     * @param vendor the raw vendor identifier from the request
+     * @return the bean name key, e.g. "murataParamSvc"
      */
-    private String resolveVendorKey(String vendor) {
+    private String resolveVendorKey(final String vendor) {
         String v = (StringUtils.hasText(vendor) ? vendor : "murata").toLowerCase();
         return v + "ParamSvc";
     }
 
+    /**
+     * Handles invalid arguments thrown during request processing, such as unsupported vendors.
+     *
+     * @param ex the exception containing the error details
+     * @return a {@link ResponseEntity} with HTTP 400 and a JSON body {"error": "..."}
+     */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, String>> handleBadRequest(IllegalArgumentException ex) {
+    public ResponseEntity<Map<String, String>> handleBadRequest(final IllegalArgumentException ex) {
         log.warn("Bad request: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(Map.of("error", ex.getMessage()));

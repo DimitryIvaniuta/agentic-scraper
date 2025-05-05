@@ -9,18 +9,52 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Maps all <vendors.*> entries from application.yml into a
- * <code>Map&lt;String, VendorCfg&gt;</code>.
+ * Binds vendor-specific configuration from <code>application.yml</code>
+ * under the <code>vendors</code> prefix. Each entry in the bound map
+ * corresponds to a {@link VendorCfg} object keyed by the vendor identifier.
+ * <p>
+ * Example YAML:
+ * <pre>{@code
+ * vendors:
+ *   murata:
+ *     base-url: https://www.murata.com
+ *     mpn-search-path: /webapi/PsdispRest
+ *     # ...
+ *   tdk:
+ *     base-url: https://product.tdk.com
+ *     # ...
+ * }</pre>
  */
 @Component
 @ConfigurationProperties(prefix = "vendors")
-@Getter @Setter
+@Getter
+@Setter
 public class VendorProperties {
 
-    private final Map<String, VendorCfg> configs  = new LinkedHashMap<>();
+    /**
+     * Map of vendor identifiers to their corresponding {@link VendorCfg}
+     * instances, preserving insertion order.
+     */
+    private final Map<String, VendorCfg> configs = new LinkedHashMap<>();
 
-    public Map<String, VendorCfg> getMap() { return configs; }
+    /**
+     * Alias for {@link #configs} for clearer naming in code.
+     *
+     * @return the map of vendor configurations
+     */
+    public Map<String, VendorCfg> getMap() {
+        return configs;
+    }
 
-    public VendorCfg forName(String name) { return configs.get(name); }
+    /**
+     * Retrieves the {@link VendorCfg} for the given vendor name.
+     *
+     * @param name the vendor identifier
+     * @return the {@link VendorCfg} associated with {@code name}, or {@code null}
+     * if no such vendor is configured
+     */
+    public VendorCfg forName(final String name) {
+        return configs.get(name);
+    }
 
 }

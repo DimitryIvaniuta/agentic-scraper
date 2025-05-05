@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.Map;
+
 /**
  * Converts a vendor‑specific JSON payload into a list of rows.
  */
