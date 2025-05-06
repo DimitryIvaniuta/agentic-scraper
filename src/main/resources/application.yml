@@ -6,7 +6,7 @@ openai:
   api:
     key: ${OPENAI_API_KEY}
     base-url: https://api.openai.com/v1
-    default-model: ${OPENAI_MODEL:gpt-4}
+    default-model: ${OPENAI_MODEL:gpt-3.5-turbo}
 
 resilience4j:
   retry:
