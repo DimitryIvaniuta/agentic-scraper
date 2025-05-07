@@ -21,7 +21,9 @@ vendors:
   configs:
     murata:
       base-url: https://www.murata.com
+      base-url-sitesearch: https://sitesearch.murata.com
       mpn-search-path: /webapi/PsdispRest
+      mpn-search-product: /search/product
       cross-ref-url: /webapi/SearchCrossReference
       parametric-search-url: /webapi/PsdispRest
       default-cate: luCeramicCapacitorsSMD

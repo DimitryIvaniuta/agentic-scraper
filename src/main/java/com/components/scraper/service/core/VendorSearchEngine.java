@@ -11,6 +11,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
+import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.util.UriBuilder;
@@ -151,6 +152,20 @@ public abstract class VendorSearchEngine {
         String cate = getCfg().getCategories().get(prefix);
 
         return cate != null ? cate : defaultCateOrFail();
+    }
+
+    protected URI getProductSitesearchUri(String mpn) {
+        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
+        q.add("op",     "AND");
+        q.add("q", mpn);
+        q.add("src",    "product");
+        q.add("region", "en-us");
+
+        return buildUri(
+                getCfg().getBaseUrlSitesearch(),
+                getCfg().getMpnSearchProduct(),
+                q
+        );
     }
 
     /**

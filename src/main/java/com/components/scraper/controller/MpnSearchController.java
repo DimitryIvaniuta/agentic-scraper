@@ -8,6 +8,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -63,6 +64,7 @@ public class MpnSearchController {
     /**
      * Handles POST requests to search for a product by its MPN.
      *
+     * @param vendor the vendor key (e.g., "murata", "tdk") identifying which
      * @param request the {@link MpnRequest} containing:
      *                <ul>
      *                  <li>{@code vendor}: the vendor identifier (e.g., "murata", "tdk")</li>
@@ -73,8 +75,10 @@ public class MpnSearchController {
      */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public List<Map<String, Object>> searchByMpn(@RequestBody @Validated final MpnRequest request) {
-        MpnSearchService svc = pick(request.vendor());
+    public List<Map<String, Object>> searchByMpn(
+            @RequestParam("vendor") final String vendor,
+            @RequestBody @Validated final MpnRequest request) {
+        MpnSearchService svc = pick(vendor);
         return svc.searchByMpn(request.mpn());
     }
 

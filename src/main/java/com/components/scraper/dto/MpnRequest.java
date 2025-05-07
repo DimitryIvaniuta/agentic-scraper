@@ -10,10 +10,8 @@ import jakarta.validation.constraints.NotBlank;
  * </p>
  *
  * @param mpn    the manufacturer part number to search for; must not be blank
- * @param vendor the vendor key (e.g., "murata", "tdk") identifying which
  *               MPN search service to invoke; must not be blank
  */
 public record MpnRequest(
-        @NotBlank String mpn,
-        @NotBlank String vendor
+        @NotBlank String mpn
 ) {}

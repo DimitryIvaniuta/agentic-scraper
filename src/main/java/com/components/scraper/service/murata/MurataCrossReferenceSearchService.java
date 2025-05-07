@@ -9,8 +9,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -53,27 +56,13 @@ import java.util.Optional;
  */
 @Slf4j
 @Service("murataCrossRefSvc")
-
 public class MurataCrossReferenceSearchService
         extends VendorSearchEngine implements CrossReferenceSearchService {
 
-    /**
-     * Number of rows to request per API call.
-     */
-    private static final int DEFAULT_ROWS = 200;
+    private static final int DEFAULT_ROWS = 20;
 
-    /**
-     * Parser that converts a JSON grid node into a list of maps (row-by-row).
-     */
     private final JsonGridParser parser;
 
-    /**
-     * Creates an instance configured for Murata.
-     *
-     * @param parser  JSON grid parser bean qualified "murataGridParser"
-     * @param factory factory for vendor configurations
-     * @param client  HTTP client for REST calls
-     */
     public MurataCrossReferenceSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
@@ -84,30 +73,17 @@ public class MurataCrossReferenceSearchService
         this.parser = parser;
     }
 
-    /**
-     * Searches for Murata cross-reference data given a competitor manufacturer part number.
-     * <p>
-     * The response is returned as two separate tables in a list:
-     * <ul>
-     *   <li><strong>competitor</strong> – competitor’s matching products</li>
-     *   <li><strong>murata</strong> – Murata’s own matching products</li>
-     * </ul>
-     *
-     * @param competitorMpn the competitor’s MPN to cross-reference (may include “#”)
-     * @param categoryPath  human-readable category/subcategory path segments;
-     *                      used to choose the correct Murata API category code
-     * @return a list of two maps, each with keys:
-     * <ul>
-     *   <li><code>table</code> – "competitor" or "murata"</li>
-     *   <li><code>records</code> – {@link List} of parsed row maps</li>
-     * </ul>
-     */
     @Override
     public List<Map<String, Object>> searchByCrossReference(final String competitorMpn,
                                                             final List<String> categoryPath) {
 
         // Determine the Murata category code for the cross-reference API
-        String cate = resolveCate(categoryPath);
+        String cate = discoverCrossRefCate(competitorMpn);
+        if(!StringUtils.hasText(cate)) {
+            cate = resolveCate(categoryPath);
+        }
+        final String cateValue = cate;
+
         String competitorMpnFixed = competitorMpn.replace("#", "").trim();
 
         // Perform the HTTP GET against Murata’s cross-reference WebAPI
@@ -129,7 +105,7 @@ public class MurataCrossReferenceSearchService
 
             /* endpoint + query parameters */
             return ub.path(getCfg().getCrossRefUrl())     // /webapi/PsdispRest
-                    .queryParam("cate", cate)
+                    .queryParam("cate", cateValue)
                     .queryParam("partno", competitorMpnFixed)
                     .queryParam("stype", 1)
                     .queryParam("pageno", 1)
@@ -164,13 +140,7 @@ public class MurataCrossReferenceSearchService
         return out;
     }
 
-    /**
-     * Extracts and parses a single grid section from the root JSON node.
-     *
-     * @param root the root JSON node of the API response
-     * @param key  the JSON property name of the section to parse
-     * @return parsed list of row maps, or empty list if the section is missing
-     */
+
     private List<Map<String, Object>> parseSection(final JsonNode root, final String key) {
         JsonNode section = root.path(key);
         if (section.isMissingNode()) {
@@ -180,12 +150,58 @@ public class MurataCrossReferenceSearchService
         return parser.parse(section);
     }
 
+
     /**
-     * Adds a direct Murata product detail URL to each row in the parsed list.
-     *
-     * @param in the list of row maps containing at least a "Part Number" entry
-     * @return the same list, with each map augmented with a "url" key
+     * Calls Murata’s public site-search JSON API to figure out the best category_id for cross-reference.
+     * If the top‐level entry has children, uses the first child’s category_id; else the parent’s.
+     * Returns null if no valid category_id was found.
      */
+    private String discoverCrossRefCate(String mpn) {
+//        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
+//        q.add("op",     "AND");
+//        q.add("q",      mpn);
+//        q.add("region", "en-us");
+//        q.add("src",    "product");
+//
+//        URI uri = buildUri(
+//                getCfg().getBaseUrlSitesearch(),
+//                getCfg().getMpnSearchProduct(),
+//                q
+//        );
+
+        JsonNode root = safeGet(getProductSitesearchUri(mpn));
+        if (root == null) {
+            log.warn("No response from site-search for Competitor MPN {}", mpn);
+            return null;
+        }
+
+        JsonNode xrefArray = root.path("crossreference");
+        if (xrefArray.isArray() && !xrefArray.isEmpty()) {
+            JsonNode first = xrefArray.get(0);
+
+            // look for a child category first
+            JsonNode children = first.path("children");
+            if (children.isArray() && !children.isEmpty()) {
+                String childCate = children.get(0).path("category_id").asText(null);
+                if (StringUtils.hasText(childCate)) {
+                    log.info("Site-search: using child cross-ref cate '{}' for MPN {}", childCate, mpn);
+                    return childCate;
+                }
+            }
+
+            // fallback to the parent’s category_id
+            String parentCate = first.path("category_id").asText(null);
+            if (StringUtils.hasText(parentCate)) {
+                log.info("Site-search: using parent cross-ref cate '{}' for MPN {}", parentCate, mpn);
+                return parentCate;
+            }
+        }
+
+        log.warn("Site-search returned no crossreference entries for MPN {}", mpn);
+        return null;
+    }
+
+
     private List<Map<String, Object>> augmentWithDetailUrl(final List<Map<String, Object>> in) {
         for (Map<String, Object> row : in) {
             String pn = Optional.ofNullable(row.get("Part Number"))
@@ -199,20 +215,7 @@ public class MurataCrossReferenceSearchService
         return in;
     }
 
-    /**
-     * Resolves a Murata cross-reference category code from a human-readable path.
-     * <p>
-     * Supports:
-     * <ul>
-     *   <li>inductor → <code>cgInductorscrossreference</code></li>
-     *   <li>capacitor → <code>cgCapacitorscrossreference</code></li>
-     *   <li>filter    → <code>cgEMIFilterscrossreference</code></li>
-     * </ul>
-     * Falls back to <code>cgInductorscrossreference</code> if no match.
-     *
-     * @param path list of category/subcategory segments
-     * @return the Murata-specific category code
-     */
+
     private String resolveCate(final List<String> path) {
         if (path != null && !path.isEmpty()) {
             String p = String.join("/", path).toLowerCase(Locale.ROOT);

@@ -26,10 +26,23 @@ public class VendorCfg {
     private String baseUrl;
 
     /**
+     * The base Site Search URL.
+     * <p>For example, "https://sitesearch.murata.com".</p>
+     */
+    private String baseUrlSitesearch;
+
+    /**
      * The path (relative to {@link #baseUrl}) used to perform MPN searches.
-     * <p>For example, "/webapi/PsdispRest" or "/api/search/mpn".</p>
+     * <p>For example, "/webapi/PsdispRest".</p>
      */
     private String mpnSearchPath;
+
+    /**
+     * The path (relative to {@link #baseUrlSitesearch}) used to perform MPN site product searches.
+     * <p>For example, "/search/product".</p>
+     */
+    private String mpnSearchProduct;
+
 
     /**
      * The path (relative to {@link #baseUrl}) used to perform cross-reference lookups.

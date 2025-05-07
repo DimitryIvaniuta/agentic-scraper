@@ -70,7 +70,7 @@ public class MurataJsonGridParser implements JsonGridParser {
      * (without {@code #}), and the literal {@code "%23"} encodes the suffix.</p>
      */
     private static final String DETAIL_URL_TEMPLATE =
-            "https://www.murata.com/en-us/products/productdetail?partno=%s%%23";
+            "https://www.murata.com/en-us/products/productdetail?partno=%s";
 
     /**
      * Parses the given JSON tree into a list of product rows.
@@ -123,7 +123,7 @@ public class MurataJsonGridParser implements JsonGridParser {
 
             // Add detail URL for convenience
             String partNoRaw = String.valueOf(row.get(COLUMN_PART_NUMBER));
-            String partNo = partNoRaw.replace(PART_NUMBER_SUFFIX, "");
+            String partNo = partNoRaw.replace(PART_NUMBER_SUFFIX, "%23");
             String url = String.format(DETAIL_URL_TEMPLATE, partNo);
             row.put("url", url);
             rows.add(row);

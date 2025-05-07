@@ -6,8 +6,11 @@ import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.components.scraper.service.core.MpnSearchService;
 import com.fasterxml.jackson.databind.JsonNode;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
@@ -41,6 +44,7 @@ import java.util.Map;
  * </p>
  *
  */
+@Slf4j
 @Service("murataMpnSvc")
 public class MurataMpnSearchService
         extends VendorSearchEngine implements MpnSearchService {
@@ -92,16 +96,20 @@ public class MurataMpnSearchService
      */
     @Override
     public List<Map<String, Object>> searchByMpn(final String mpn) {
-        // Determine the Murata category code based on the MPN prefix
-//        String cate = cateFromPartNo(mpn);
-        // step 1: try AI lookup
-        String cate = llmHelper.determineCate(mpn, this::cateFromPartNo);
-//        String cate = (!aiCats.isEmpty())
-//                ? aiCats.getLast()
-//                : cateFromPartNo(mpn);
 
         // Clean the MPN string (trim whitespace, leave trailing "#" if present)
         String cleaned = mpn.trim();
+
+        // Discover cate via site‐search
+        String cate = discoverCate(cleaned);
+
+        // Fallback to search cate if needed
+        if (!StringUtils.hasText(cate)) {
+            // Determine the Murata category code based on the MPN prefix
+            cate = cateFromPartNo(cleaned);
+        }
+
+        final String cateValue = cate;
 
         // Perform the HTTP GET and parse the JSON grid
         JsonNode root = safeGet(ub -> {
@@ -122,7 +130,7 @@ public class MurataMpnSearchService
 
             // Build the full endpoint URI with query parameters
             return ub.path(getCfg().getMpnSearchPath())     // /webapi/PsdispRest
-                    .queryParam("cate",   cate)
+                    .queryParam("cate",   cateValue)
                     .queryParam("partno", cleaned)
                     .queryParam("stype",  1)
                     .queryParam("lang",   "en-us")
@@ -132,4 +140,38 @@ public class MurataMpnSearchService
         // Parse the grid into a list of maps and return
         return parser.parse(root).stream().toList();
     }
+
+    /**
+     * Call Murata’s public “site search” JSON endpoint to pull out the
+     * first category_id from its "categories" array.
+     */
+    private String discoverCate(String mpn) {
+        JsonNode resp = safeGet(getProductSitesearchUri(mpn));
+        if(resp == null) {
+            log.warn("No response from site-search for Competitor MPN {}", mpn);
+            return null;
+        }
+        JsonNode cats = resp.path("categories");
+        if (cats.isArray() && !cats.isEmpty()) {
+            JsonNode first = cats.get(0);
+            JsonNode children = first.path("children");
+            if (children.isArray() && !children.isEmpty()) {
+                String childCate = children.get(0).path("category_id").asText(null);
+                if (StringUtils.hasText(childCate)) {
+                    log.info("Using child category '{}' for MPN {}", childCate, mpn);
+                    return childCate;
+                }
+            }
+            // no valid child, fall back to parent
+            String parentCate = first.path("category_id").asText(null);
+            if (StringUtils.hasText(parentCate)) {
+                log.info("Using parent category '{}' for MPN {}", parentCate, mpn);
+                return parentCate;
+            }
+        }
+
+        log.warn("Murata site‐search returned no categories for MPN {}", mpn);
+        return null;
+    }
+
 }

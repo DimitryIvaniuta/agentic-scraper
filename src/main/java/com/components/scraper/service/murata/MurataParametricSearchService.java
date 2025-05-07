@@ -106,7 +106,10 @@ public class MurataParametricSearchService
     ) {
 
         // 1) Resolve cate code from category path
-        String cate = resolveCate(category, subcategory);
+        String cate = discoverCate(subcategory != null? subcategory : category);
+        if(StringUtils.isBlank(cate)) {
+            cate = resolveCate(category, subcategory);
+        }
         String partNo = StringUtils.defaultString(subcategory);
 
         JsonNode root = safeGet(uriBuilder(cate, partNo, parameters, maxResults));
@@ -202,6 +205,39 @@ public class MurataParametricSearchService
 
             return b.build();
         };
+    }
+
+    /**
+     * Call Murata’s public “site search” JSON endpoint to pull out the
+     * first category_id from its "categories" array.
+     */
+    private String discoverCate(String mpn) {
+        JsonNode resp = safeGet(getProductSitesearchUri(mpn));
+        if(resp == null) {
+            log.warn("No response from site-search for Competitor MPN {}", mpn);
+            return null;
+        }
+        JsonNode cats = resp.path("categories");
+        if (cats.isArray() && !cats.isEmpty()) {
+            JsonNode first = cats.get(0);
+            JsonNode children = first.path("children");
+            if (children.isArray() && !children.isEmpty()) {
+                String childCate = children.get(0).path("category_id").asText(null);
+                if (org.springframework.util.StringUtils.hasText(childCate)) {
+                    log.info("Using child category '{}' for MPN {}", childCate, mpn);
+                    return childCate;
+                }
+            }
+            // no valid child, fall back to parent
+            String parentCate = first.path("category_id").asText(null);
+            if (org.springframework.util.StringUtils.hasText(parentCate)) {
+                log.info("Using parent category '{}' for MPN {}", parentCate, mpn);
+                return parentCate;
+            }
+        }
+
+        log.warn("Murata site‐search returned no categories for MPN {}", mpn);
+        return null;
     }
 
     /**
