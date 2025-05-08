@@ -1,6 +1,7 @@
 package com.components.scraper.service.murata;
 
 import com.components.scraper.ai.LLMHelper;
+import com.components.scraper.config.ParametricFilterConfig;
 import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
@@ -24,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * <h2>Murata – Parametric search</h2>
@@ -56,21 +58,29 @@ public class MurataParametricSearchService
     private final JsonGridParser parser;
 
     /**
+     * All parametric‐filter definitions loaded from YAML.
+     */
+    private final ParametricFilterConfig filterConfig;
+
+    /**
      * Constructs a new MurataParametricSearchService.
      *
      * @param parser    the grid‐parser bean (must be qualified as "murataGridParser")
      * @param factory   used to look up vendor‐specific configuration
      * @param client    a preconfigured {@link RestClient} for HTTP calls
      * @param llmHelper a preconfigured {@link RestClient} for HTTP
+     * @param filterConfig YAML-bound filter definitions
      */
     public MurataParametricSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
             final RestClient client,
-            final LLMHelper llmHelper
+            final LLMHelper llmHelper,
+            final ParametricFilterConfig filterConfig
     ) {
         super(factory.forVendor("murata"), client, llmHelper);
         this.parser = parser;
+        this.filterConfig = filterConfig;
     }
 
     /**
@@ -198,9 +208,19 @@ public class MurataParametricSearchService
                     .queryParam("lang", "en-us");
 
             /* add one “scon” parameter per filter */
-            params.forEach((key, value) -> renderScon(key, value)
-                    .forEach(s -> b.queryParam("scon", s)));
+            // load filter definitions for this category
+            ParametricFilterConfig.CategoryFilters defs = filterConfig.getCategoryFilters("murata", cate);
 
+            if (defs != null) {
+                Map<String, String> captionToParam = defs.getFilters()
+                        .stream()
+                        .collect(Collectors.toMap(
+                                ParametricFilterConfig.FilterDef::getCaption,
+                                ParametricFilterConfig.FilterDef::getParam
+                        ));
+                params.forEach((key, value) -> renderScon(captionToParam.get(key), value)
+                        .forEach(s -> b.queryParam("scon", s)));
+            }
             return b.build();
         };
     }
@@ -279,7 +299,9 @@ public class MurataParametricSearchService
      * @throws IllegalArgumentException if the raw type is unsupported
      */
     private List<String> renderScon(final String field, final Object raw) {
-
+        if (field == null) {
+            return Collections.emptyList();
+        }
         var sb = new StringBuilder(field).append(';');
 
         /* ---------- single literal ------------------------------------------------ */

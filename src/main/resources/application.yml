@@ -2,6 +2,8 @@ spring:
   config:
     import:
       - optional:dotenv:.env
+      - optional:classpath:parametric-filters.yml
+
 openai:
   api:
     key: ${OPENAI_API_KEY}

@@ -1,0 +1,247 @@
+# parametric-filters.yml
+# ======================
+# Murata parametric search filters
+#
+# Top-level keys are Murata 'cate' codes (as used in the URL).
+# Under each, 'filters' is a list of panels with:
+#   • caption: exactly what the UI shows
+#   • param: the 'scon' key you send in the query
+#   • type: one of { single, range, list, boolean } (your code uses this to render)
+#
+parametric-filters:
+  configs:
+    murata:
+      categories:
+        luCeramicCapacitorsSMD:
+          filters:
+            - caption: "Production Status"
+              param: "ceramicCapacitors-status"
+              type: list
+
+            - caption: "Specific Applications"
+              param: "ceramicCapacitors-applicationcategory"
+              type: list
+
+            - caption: "New"
+              param: "ceramicCapacitors-new"
+              type: boolean
+
+            - caption: "Standard"
+              param: "ceramicCapacitors-standard"
+              type: list
+
+            - caption: "AEC-Q200 Support"
+              param: "ceramicCapacitors-ratedcurrenttext"
+              type: list
+
+            - caption: "Capacitance"
+              param: "ceramicCapacitors-capacitance"
+              type: range
+
+            - caption: "Capacitance 3 DigitCode"
+              param: "ceramicCapacitors-capacitance3DigitCode"
+              type: range
+
+            - caption: "Rated Voltage AC"
+              param: "ceramicCapacitors-ratedVoltageAC"
+              type: range
+
+            - caption: "Rated Voltage DC"
+              param: "ceramicCapacitors-ratedVoltageDC"
+              type: range
+
+            - caption: "L size"
+              param: "ceramicCapacitors-lengthdisp"
+              type: range
+
+            - caption: "W size"
+              param: "ceramicCapacitors-widthdisp"
+              type: range
+
+            - caption: "T size"
+              param: "ceramicCapacitors-thicknessdisp"
+              type: range
+
+            - caption: "Thickness (Max.)"
+              param: ceramicCapacitors-thicknessMax
+              type: range
+
+            - caption: "Appearance"
+              param: "ceramicCapacitors-appearance"
+              type: list
+
+            - caption: "Temperature characteristics"
+              param: "ceramicCapacitors-tempecharacteristicsdisp"
+              type: list
+
+            - caption: "Temperature range of temperature characteristics"
+              param: "ceramicCapacitors-temperangeoftempecharacteristics"
+              type: range
+
+            - caption: "Tolerance of capacitance"
+              param: "ceramicCapacitors-torelanceCapacitanceText"
+              type: list
+
+            - caption: "Production Start"
+              param: "ceramicCapacitors-productionStart"
+              type: range
+
+            - caption: "Date of Discontinuation"
+              param: "ceramicCapacitors-productionEnd"
+              type: range
+
+        luInductorWirewound:
+          filters:
+            - caption: "Inductance"
+              param: "inductors-inductance"
+              type: range
+
+            - caption: "Inductance Tolerance"
+              param: "inductors-inductancetolerance"
+              type: list
+
+            - caption: "Rated Current (Itemp)"
+              param: "inductors-ratedcurrentitemp"
+              type: range
+
+            - caption: "Rated Current (Isat)"
+              param: "inductors-ratedcurrentisat"
+              type: range
+
+            - caption: "Rdc(max.)"
+              param: "inductors-rdcmax"
+              type: range
+
+            - caption: "SRF (min.)"
+              param: "inductors-selfresonancefrequencymin"
+              type: range
+
+            - caption: "Series"
+              param: "inductors-series"
+              type: list
+
+            - caption: "Brand"
+              param: "inductors-brand"
+              type: list
+
+            # …and so on for other inductor filters…
+
+        luEMIFiltersSMD:
+          filters:
+            - caption: "Impedance at Frequency"
+              param: "emifilters-frequencyresponse"
+              type: range
+
+            - caption: "Rated Current"
+              param: "emifilters-ratedcurrent"
+              type: range
+
+            - caption: "Volume Resistivity"
+              param: "emifilters-resistivity"
+              type: range
+
+            - caption: "Series"
+              param:   "emifilters-series"
+              type:    list
+
+            - caption: "Core Material"
+              param:   "emifilters-material"
+              type:    list
+
+        # ——————————————————————————————
+        # New categories added below
+        # ——————————————————————————————
+
+        luThermistorsNTC:
+          filters:
+            - caption: "Resistance"
+              param:   "thermistorsNTC-resistance"
+              type:    range
+
+            - caption: "Resistance Tolerance"
+              param:   "thermistorsNTC-tolerance"
+              type:    list
+
+            - caption: "B-constant"
+              param:   "thermistorsNTC-betavalue"
+              type:    range
+
+            - caption: "Operating Temperature"
+              param:   "thermistorsNTC-operatingtemperature"
+              type:    range
+
+            - caption: "Package"
+              param:   "thermistorsNTC-package"
+              type:    list
+
+        luThermistorsPTC:
+          filters:
+            - caption: "Resistance"
+              param:   "thermistorsPTC-resistance"
+              type:    range
+
+            - caption: "Trip Temperature"
+              param:   "thermistorsPTC-triptemperature"
+              type:    range
+
+            - caption: "Hold Current"
+              param:   "thermistorsPTC-holdcurrent"
+              type:    range
+
+            - caption: "Maximum Voltage"
+              param:   "thermistorsPTC-maxvoltage"
+              type:    range
+
+            - caption: "Package"
+              param:   "thermistorsPTC-package"
+              type:    list
+
+        luTrimmerPotentiometers:
+          filters:
+            - caption: "Resistance"
+              param:   "trimmers-resistance"
+              type:    range
+
+            - caption: "Tolerance"
+              param:   "trimmers-tolerance"
+              type:    list
+
+            - caption: "Adjustment Type"
+              param:   "trimmers-adjustmenttype"
+              type:    list
+
+            - caption: "Temperature Coefficient"
+              param:   "trimmers-tc"
+              type:    list
+
+            - caption: "Operating Temperature"
+              param:   "trimmers-operatingtemperature"
+              type:    range
+
+            - caption: "Package / Mounting"
+              param:   "trimmers-package"
+              type:    list
+
+        luPiezoSoundComponents:
+          filters:
+            - caption: "Resonant Frequency"
+              param:   "piezo-resonatorsfrequency"
+              type:    range
+
+            - caption: "Capacitance"
+              param:   "piezo-capacitance"
+              type:    range
+
+            - caption: "Operating Voltage"
+              param:   "piezo-voltage"
+              type:    range
+
+            - caption: "Applications"
+              param:   "piezo-applicationcategory"
+              type:    list
+
+            - caption: "Package"
+              param:   "piezo-package"
+              type:    list
+
+
