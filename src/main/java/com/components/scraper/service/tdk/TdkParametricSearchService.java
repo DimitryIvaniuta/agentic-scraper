@@ -15,13 +15,13 @@ import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.util.UriBuilder;
 
-import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.function.Function;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -80,7 +80,9 @@ public class TdkParametricSearchService
                 getCfg().getParametricSearchUrl(),     // e.g. /en/search/productsearch
                 q));
 
-        if (root == null) return List.of();
+        if (root == null) {
+            return List.of();
+        }
 
         List<Map<String, Object>> rows = parser.parse(root);
 
@@ -101,19 +103,20 @@ public class TdkParametricSearchService
      * <pre>parameterName:value1,value2…</pre>
      * (comma for multiple values, dash “min‑max” for ranges).
      */
-    private MultiValueMap<String, String>
-    buildQueryParams(String category,
-                     @Nullable String sub,
-                     @Nullable Map<String, Object> filters) {
-
+    private MultiValueMap<String, String> buildQueryParams(
+            final String category,
+            @Nullable final String sub,
+            @Nullable final Map<String, Object> filters) {
         var q = new LinkedMultiValueMap<String, String>();
 
         q.add("cat", category);
-        if (StringUtils.isNotBlank(sub))
+        if (StringUtils.isNotBlank(sub)) {
             q.add("sub", Objects.requireNonNull(sub).trim());
+        }
 
-        if (filters != null && !filters.isEmpty())
+        if (filters != null && !filters.isEmpty()) {
             q.add("fn", encodeFilters(filters));
+        }
 
         /* localisation – TDK understands ISO‑lang plus “filter” flag */
         q.add("lang", "en");
@@ -124,7 +127,7 @@ public class TdkParametricSearchService
     /**
      * Encode caller‑friendly filter map into TDK’s <code>fn</code> string.
      */
-    private String encodeFilters(Map<String, Object> filters) {
+    private String encodeFilters(final Map<String, Object> filters) {
 
         return filters.entrySet().stream()
                 .map(e -> encodeOne(e.getKey(), e.getValue()))
@@ -132,27 +135,35 @@ public class TdkParametricSearchService
     }
 
     /**
-     * Encode a single parameter
+     * Encodes a single filter into Murata’s “scon” syntax, then URL-encodes
+     * per RFC-3986 (preserving “|”).
+     *
+     * @param name   the filter field name
+     * @param rawVal the filter value, which may be:
+     *               <ul>
+     *                 <li>a {@link Map} with keys "min" and/or "max" → "min-max"</li>
+     *                 <li>a {@link Collection} → comma-joined list</li>
+     *                 <li>anything else → {@code toString()}</li>
+     *               </ul>
+     * @return an RFC-3986 encoded string of the form "{@code name:encodedValues}"
      */
-    private String encodeOne(String name, Object rawVal) {
-
-        String encodedValues;
-
-        switch (rawVal) {
+    private String encodeOne(final String name, final Object rawVal) {
+        String encodedValues = switch (rawVal) {
             case Map<?, ?> m -> {
                 String min = Objects.toString(m.get("min"), "");
                 String max = Objects.toString(m.get("max"), "");
-                encodedValues = min + "-" + max;        // “‑” separator
+                yield min + "-" + max;
             }
-            case Collection<?> c -> encodedValues = c.stream()
+            case Collection<?> c -> c.stream()
                     .map(Object::toString)
                     .collect(Collectors.joining(","));
+            default -> Objects.toString(rawVal, "");
+        };
 
-            default -> encodedValues = rawVal.toString();
-        }
-
-        /* RFC‑3986 encode (TDK rejects ‘%20’; keep “|” unencoded). */
-        return URLEncoder.encode(name + ":" + encodedValues, StandardCharsets.UTF_8)
+        // Build the raw "name:values" string, then percent-encode (but keep "|" literal)
+        String raw = name + ":" + encodedValues;
+        return URLEncoder
+                .encode(raw, StandardCharsets.UTF_8)
                 .replace("%7C", "|");
     }
 

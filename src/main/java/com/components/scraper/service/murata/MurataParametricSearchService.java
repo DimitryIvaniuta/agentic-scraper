@@ -58,9 +58,10 @@ public class MurataParametricSearchService
     /**
      * Constructs a new MurataParametricSearchService.
      *
-     * @param parser  the grid‐parser bean (must be qualified as "murataGridParser")
-     * @param factory used to look up vendor‐specific configuration
-     * @param client  a preconfigured {@link RestClient} for HTTP calls
+     * @param parser    the grid‐parser bean (must be qualified as "murataGridParser")
+     * @param factory   used to look up vendor‐specific configuration
+     * @param client    a preconfigured {@link RestClient} for HTTP calls
+     * @param llmHelper a preconfigured {@link RestClient} for HTTP
      */
     public MurataParametricSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
@@ -100,19 +101,18 @@ public class MurataParametricSearchService
     public List<Map<String, Object>> searchByParameters(
             @NonNull final String category,
             @Nullable final String subcategory,
-            @Nullable final Map<String, Object> parameters,
+            @NonNull final Map<String, Object> parameters,
             final int maxResults
 
     ) {
 
-        // 1) Resolve cate code from category path
-        String cate = discoverCate(subcategory != null? subcategory : category);
-        if(StringUtils.isBlank(cate)) {
+        // 1) Resolve cate code from mpn
+        String cate = discoverCate(getMpnParam(parameters));
+        if (StringUtils.isBlank(cate)) {
             cate = resolveCate(category, subcategory);
         }
-        String partNo = StringUtils.defaultString(subcategory);
 
-        JsonNode root = safeGet(uriBuilder(cate, partNo, parameters, maxResults));
+        JsonNode root = safeGet(uriBuilder(cate, parameters, maxResults));
         if (root == null) {
             return Collections.emptyList();
         }
@@ -164,13 +164,11 @@ public class MurataParametricSearchService
      * </ul>
      *
      * @param cate     the category code
-     * @param partno   the MPN filter (may be blank)
      * @param params   map of filters (keys → scon fields, values → various shapes)
      * @param rows     max rows to request
      * @return a lambda suitable for {@link #safeGet(Function)}
      */
     private Function<UriBuilder, URI> uriBuilder(final String cate,
-                                                 final String partno,
                                                  final Map<String, Object> params,
                                                  final int rows) {
 
@@ -194,7 +192,7 @@ public class MurataParametricSearchService
             UriBuilder b = ub
                     .path(getCfg().getParametricSearchUrl())    // usually /webapi/PsdispRest
                     .queryParam("cate", cate)
-                    .queryParam("partno", partno)
+                    .queryParam("partno", getMpnParam(params))
                     .queryParam("stype", 1)
                     .queryParam("rows", rows)
                     .queryParam("lang", "en-us");
@@ -207,13 +205,25 @@ public class MurataParametricSearchService
         };
     }
 
+    private String getMpnParam(final Map<String, Object> params) {
+        return Optional.ofNullable(params.get("mpn"))
+                .map(Object::toString).orElse(null);
+    }
+
     /**
-     * Call Murata’s public “site search” JSON endpoint to pull out the
-     * first category_id from its "categories" array.
+     * Calls Murata’s public site‐search JSON endpoint to discover the first
+     * matching <code>category_id</code> for the given MPN. Prefers a child
+     * category if present; otherwise falls back to the parent category.
+     *
+     * @param mpn the manufacturer part number to search (must be at least 3 characters)
+     * @return the discovered <code>category_id</code>, or {@code null} if none found
      */
-    private String discoverCate(String mpn) {
+    private String discoverCate(final String mpn) {
+        if (StringUtils.isBlank(mpn) || mpn.length() < PARTNO_PREFIX_LENGTH) {
+            return null;
+        }
         JsonNode resp = safeGet(getProductSitesearchUri(mpn));
-        if(resp == null) {
+        if (resp == null) {
             log.warn("No response from site-search for Competitor MPN {}", mpn);
             return null;
         }

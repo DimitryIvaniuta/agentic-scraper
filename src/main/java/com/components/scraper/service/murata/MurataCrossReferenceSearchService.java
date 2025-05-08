@@ -9,11 +9,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -59,10 +56,26 @@ import java.util.Optional;
 public class MurataCrossReferenceSearchService
         extends VendorSearchEngine implements CrossReferenceSearchService {
 
+    /**
+     * Default number of rows to request in each cross-reference API call.
+     */
     private static final int DEFAULT_ROWS = 20;
 
+    /**
+     * Parser that converts a JSON grid section into a list of field→value maps.
+     */
     private final JsonGridParser parser;
 
+    /**
+     * Constructs a new {@code MurataCrossReferenceSearchService} with the given
+     * JSON grid parser, vendor configuration factory, HTTP client, and LLM helper.
+     * This service performs cross‑reference lookups against Murata’s WebAPI.
+     *
+     * @param parser      the {@link JsonGridParser} to transform JSON grid sections into record maps
+     * @param factory     the {@link VendorConfigFactory} to obtain Murata-specific configuration
+     * @param client      the HTTP client ({@link org.springframework.web.client.RestClient}) for API calls
+     * @param llmHelper   the {@link LLMHelper} for optional AI‑based category discovery
+     */
     public MurataCrossReferenceSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
@@ -73,13 +86,29 @@ public class MurataCrossReferenceSearchService
         this.parser = parser;
     }
 
+    /**
+     * Searches Murata’s cross‑reference API for equivalent components to a competitor’s part.
+     *
+     * <p>The method determines an appropriate <code>cate</code> parameter via AI-assisted
+     * discovery or fallback mapping, constructs the API request URI, invokes the HTTP GET,
+     * and parses the JSON response into two record tables: competitor and Murata results.
+     * The output is a list of two maps, each containing:
+     * <ul>
+     *   <li><strong>"table"</strong> – identifier ("competitor" or "murata")</li>
+     *   <li><strong>"records"</strong> – list of {@code Map<String,Object>} rows</li>
+     * </ul>
+     *
+     * @param competitorMpn  the competitor’s manufacturer part number (may include trailing “#”)
+     * @param categoryPath   optional category hierarchy for fallback code resolution
+     * @return a list of two entries (competitor and Murata tables), or an empty list if the API returns no data
+     * @throws IllegalArgumentException if no valid <code>cate</code> can be resolved
+     */
     @Override
     public List<Map<String, Object>> searchByCrossReference(final String competitorMpn,
                                                             final List<String> categoryPath) {
-
         // Determine the Murata category code for the cross-reference API
         String cate = discoverCrossRefCate(competitorMpn);
-        if(!StringUtils.hasText(cate)) {
+        if (!StringUtils.hasText(cate)) {
             cate = resolveCate(categoryPath);
         }
         final String cateValue = cate;
@@ -140,7 +169,14 @@ public class MurataCrossReferenceSearchService
         return out;
     }
 
-
+    /**
+     * Parses a named JSON grid section into a list of record maps using the configured parser.
+     * Logs a warning if the section is missing and returns an empty list.
+     *
+     * @param root the root JSON node containing grid sections
+     * @param key  the JSON property name of the section to parse (e.g. "otherPsDispRest")
+     * @return a list of record maps, or an empty list if the section is missing
+     */
     private List<Map<String, Object>> parseSection(final JsonNode root, final String key) {
         JsonNode section = root.path(key);
         if (section.isMissingNode()) {
@@ -150,25 +186,25 @@ public class MurataCrossReferenceSearchService
         return parser.parse(section);
     }
 
-
     /**
-     * Calls Murata’s public site-search JSON API to figure out the best category_id for cross-reference.
-     * If the top‐level entry has children, uses the first child’s category_id; else the parent’s.
-     * Returns null if no valid category_id was found.
+     * Attempts to discover the correct Murata cross-reference category code for a given
+     * competitor MPN by querying Murata’s public site-search endpoint.
+     * <p>
+     * This method will:
+     * <ol>
+     *   <li>Invoke the site-search API to retrieve a JSON response.</li>
+     *   <li>Inspect the top-level <code>crossreference</code> array.</li>
+     *   <li>If the first entry has non-empty <code>children</code>, return the
+     *       <code>category_id</code> of its first child.</li>
+     *   <li>Otherwise, fall back to the parent entry’s own <code>category_id</code>.</li>
+     *   <li>If no valid category is found, returns <code>null</code> and logs a warning.</li>
+     * </ol>
+     *
+     * @param mpn the competitor’s manufacturer part number (e.g. “XYZ1234”)
+     * @return the discovered cross-reference <code>cate</code> code, or <code>null</code>
+     *         if none could be determined
      */
-    private String discoverCrossRefCate(String mpn) {
-//        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
-//        q.add("op",     "AND");
-//        q.add("q",      mpn);
-//        q.add("region", "en-us");
-//        q.add("src",    "product");
-//
-//        URI uri = buildUri(
-//                getCfg().getBaseUrlSitesearch(),
-//                getCfg().getMpnSearchProduct(),
-//                q
-//        );
-
+    private String discoverCrossRefCate(final String mpn) {
         JsonNode root = safeGet(getProductSitesearchUri(mpn));
         if (root == null) {
             log.warn("No response from site-search for Competitor MPN {}", mpn);
@@ -200,7 +236,6 @@ public class MurataCrossReferenceSearchService
         log.warn("Site-search returned no crossreference entries for MPN {}", mpn);
         return null;
     }
-
 
     private List<Map<String, Object>> augmentWithDetailUrl(final List<Map<String, Object>> in) {
         for (Map<String, Object> row : in) {

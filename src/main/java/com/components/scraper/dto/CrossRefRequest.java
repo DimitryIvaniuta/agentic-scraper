@@ -20,4 +20,5 @@ public record CrossRefRequest(
         @NotBlank
         String competitorMpn,
         List<String> categoryPath
-) {}
+) {
+}

@@ -8,7 +8,6 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
@@ -46,7 +45,7 @@ public abstract class VendorSearchEngine {
     /**
      * Number of characters to use when extracting a part number prefix.
      */
-    private static final int PARTNO_PREFIX_LENGTH = 3;
+    public static final int PARTNO_PREFIX_LENGTH = 3;
 
     /**
      * Holds vendor-specific configuration parameters such as base URL,
@@ -60,7 +59,7 @@ public abstract class VendorSearchEngine {
     protected final org.springframework.web.client.RestClient client;
 
     /**
-     * LLMHelper to ask ChatGPT for the vendor’s real “cate” code
+     * LLMHelper to ask ChatGPT for the vendor’s real “cate” code.
      */
     protected final LLMHelper llmHelper;
 
@@ -154,11 +153,25 @@ public abstract class VendorSearchEngine {
         return cate != null ? cate : defaultCateOrFail();
     }
 
-    protected URI getProductSitesearchUri(String mpn) {
-        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
-        q.add("op",     "AND");
+    /**
+     * Builds the URI for Murata’s public “site search” endpoint to discover
+     * product categories by MPN.  The resulting URI will include the following
+     * query parameters:
+     * <ul>
+     *   <li><code>op=AND</code> — logical AND operator</li>
+     *   <li><code>q={mpn}</code> — the part number to query</li>
+     *   <li><code>src=product</code> — restrict search to products</li>
+     *   <li><code>region=en-us</code> — specify the English (US) site region</li>
+     * </ul>
+     *
+     * @param mpn the manufacturer part number to search for (must not be blank)
+     * @return a {@link URI} pointing to the Murata site‐search API for the given MPN
+     */
+    protected URI getProductSitesearchUri(final String mpn) {
+        MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+        q.add("op", "AND");
         q.add("q", mpn);
-        q.add("src",    "product");
+        q.add("src", "product");
         q.add("region", "en-us");
 
         return buildUri(

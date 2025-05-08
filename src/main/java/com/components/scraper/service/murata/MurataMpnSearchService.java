@@ -9,8 +9,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
@@ -142,12 +140,27 @@ public class MurataMpnSearchService
     }
 
     /**
-     * Call Murata’s public “site search” JSON endpoint to pull out the
-     * first category_id from its "categories" array.
+     * Attempts to determine the Murata “cate” parameter by querying the Murata
+     * site‐search endpoint.  This method:
+     * <ol>
+     *   <li>Performs a site‐search GET request for the given MPN.</li>
+     *   <li>Inspects the returned JSON under the {@code categories} array.</li>
+     *   <li>If the first category element has a non-empty {@code children} array,
+     *       extracts the child’s {@code category_id}.</li>
+     *   <li>Otherwise, falls back to the parent’s {@code category_id}.</li>
+     * </ol>
+     *
+     * @param mpn the manufacturer part number to look up (must be at least {@link #PARTNO_PREFIX_LENGTH} characters)
+     * @return the discovered category_id (e.g. “cgInductorsCrossReference”), or
+     *         {@code null} if the MPN is invalid, no response is received, or
+     *         no category_id can be found in the JSON
      */
-    private String discoverCate(String mpn) {
+    private String discoverCate(final String mpn) {
+        if (!StringUtils.hasText(mpn) || mpn.length() < PARTNO_PREFIX_LENGTH) {
+            return null;
+        }
         JsonNode resp = safeGet(getProductSitesearchUri(mpn));
-        if(resp == null) {
+        if (resp == null) {
             log.warn("No response from site-search for Competitor MPN {}", mpn);
             return null;
         }

@@ -14,4 +14,5 @@ import jakarta.validation.constraints.NotBlank;
  */
 public record MpnRequest(
         @NotBlank String mpn
-) {}
+) {
+}
