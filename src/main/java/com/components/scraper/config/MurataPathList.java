@@ -26,10 +26,6 @@ import java.util.List;
 @Data
 public class MurataPathList {
 
-    // ---------------------------------------------------------------------
-    //  Private state
-    // ---------------------------------------------------------------------
-
     /**
      * All <em>path-to-cate</em> mappings, exactly as declared in the YAML.
      * <p>

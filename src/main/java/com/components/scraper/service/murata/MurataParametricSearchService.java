@@ -7,7 +7,6 @@ import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,7 +19,6 @@ import org.springframework.web.util.UriBuilder;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -72,16 +70,24 @@ public class MurataParametricSearchService
      */
     private final ParametricFilterConfig filterConfig;
 
+    /**
+     * Component responsible for translating human-readable category or subcategory
+     * labels into the exact Murata <code>cate</code> lookup codes.
+     * <p>For example, given inputs like <code>"Capacitors"</code> or
+     * <code>"Ceramic Capacitors(SMD)"</code>, this resolver returns
+     * <code>"luCeramicCapacitorsSMD"</code>.</p>
+     */
     private final MurataCateResolver cateResolver;
 
     /**
      * Constructs a new MurataParametricSearchService.
      *
-     * @param parser    the grid‐parser bean (must be qualified as "murataGridParser")
-     * @param factory   used to look up vendor‐specific configuration
-     * @param client    a preconfigured {@link RestClient} for HTTP calls
-     * @param llmHelper a preconfigured {@link RestClient} for HTTP
+     * @param parser       the grid‐parser bean (must be qualified as "murataGridParser")
+     * @param factory      used to look up vendor‐specific configuration
+     * @param client       a preconfigured {@link RestClient} for HTTP calls
+     * @param llmHelper    a preconfigured {@link RestClient} for HTTP
      * @param filterConfig YAML-bound filter definitions
+     * @param cateResolver a category translate service
      */
     public MurataParametricSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
@@ -89,7 +95,7 @@ public class MurataParametricSearchService
             final RestClient client,
             final LLMHelper llmHelper,
             final ParametricFilterConfig filterConfig,
-            MurataCateResolver cateResolver
+            final MurataCateResolver cateResolver
     ) {
         super(factory.forVendor("murata"), client, llmHelper);
         this.parser = parser;
@@ -154,9 +160,9 @@ public class MurataParametricSearchService
      * mappings.  The longest matching prefix wins; if none match, returns the
      * vendor’s default category.
      *
-     * @param category  the main category (never blank)
-     * @param sub       an optional subcategory (may be {@code null})
-     * @param defaultCategory       the fallback cate value
+     * @param category        the main category (never blank)
+     * @param sub             an optional subcategory (may be {@code null})
+     * @param defaultCategory the fallback cate value
      * @return the Murata <code>cate</code> lookup code
      */
     private String resolveCate(final String category, final String sub, final String defaultCategory) {
@@ -164,19 +170,11 @@ public class MurataParametricSearchService
         if (map == null || map.isEmpty()) {
             return Optional.ofNullable(defaultCategory).orElse(getCfg().getDefaultCate());
         }
-
-//        String path = (category + (sub == null ? "" : PATH_DELIMITER + sub)).toUpperCase(Locale.ROOT);
-        final String normalisedPath = (category +                                   // "Capacitors"
-                (StringUtils.isBlank(sub) ? "" : PATH_DELIMITER + sub))                        //  + "/Ceramic Capacitors(SMD)"
+        final String normalisedPath = (category
+                + (StringUtils.isBlank(sub) ? "" : PATH_DELIMITER + sub))
                 .toLowerCase(Locale.ROOT)
                 .trim();
         // longest matching prefix wins
-//        return map.keySet()
-//                .stream()
-//                .filter(path::startsWith)
-//                .max(Comparator.comparingInt(String::length))
-//                .map(map::get)
-//                .orElse(Optional.ofNullable(defaultCategory).orElse(getCfg().getDefaultCate()));
         return cateResolver.cateFor(normalisedPath);
     }
 
@@ -190,9 +188,9 @@ public class MurataParametricSearchService
      *   <li>Standard Murata params: <code>stype=1</code>, <code>lang=en-us</code>, etc.</li>
      * </ul>
      *
-     * @param cate     the category code
-     * @param params   map of filters (keys → scon fields, values → various shapes)
-     * @param rows     max rows to request
+     * @param cate   the category code
+     * @param params map of filters (keys → scon fields, values → various shapes)
+     * @param rows   max rows to request
      * @return a lambda suitable for {@link #safeGet(Function)}
      */
     private Function<UriBuilder, URI> uriBuilder(final String cate,
@@ -252,7 +250,7 @@ public class MurataParametricSearchService
      *                 "and the capacitance no more than 10"
      * }
      * </pre>
-     *
+     * <p>
      * The sentence is passed to the LLM which returns a JSON object whose <em>keys
      * are UI-captions</em> and whose values are already structured (scalar, list,
      * or <code>{min,max}</code>).  A typical response might be:
@@ -288,64 +286,114 @@ public class MurataParametricSearchService
      *   </li>
      * </ol>
      *
-     * @param params  mutable request-parameter map received from the REST layer;
-     *                used only for reading the optional {@code "details"} entry
-     * @param defs    YAML-backed filter definitions for the current <em>cate</em>;
-     *                needed to translate UI captions to Murata API field names
-     * @param b       the {@link UriBuilder} that is being assembled for the
-     *                final HTTP request – this method appends additional
-     *                {@code scon=} query parameters to it
+     * @param params mutable request-parameter map received from the REST layer;
+     *               used only for reading the optional {@code "details"} entry
+     * @param defs   YAML-backed filter definitions for the current <em>cate</em>;
+     *               needed to translate UI captions to Murata API field names
+     * @param b      the {@link UriBuilder} that is being assembled for the
+     *               final HTTP request – this method appends additional
+     *               {@code scon=} query parameters to it
      */
-    private void buildDetailsQueryParameters(Map<String, Object> params, ParametricFilterConfig.CategoryFilters defs, UriBuilder b) {
-        // "details": "the dc rated voltage should be in the range of 100-200 and the capacitance no more than 10"
-        Object details = params.get("details");
-        if (details != null && StringUtils.isNotBlank(details.toString())) {
-            JsonNode aiJson = llmHelper.classify(details.toString());
-            if (aiJson != null && aiJson.isObject()) {
-                // caption → param map (only once per request)
-                Map<String, String> captionToParam = defs.getFilters().stream()
+    private void buildDetailsQueryParameters(final Map<String, Object> params,
+                                             final ParametricFilterConfig.CategoryFilters defs,
+                                             final UriBuilder b) {
+
+        /* 1—short-circuit if “details” is missing or blank */
+        Object detailsObj = params.get("details");
+        if (detailsObj == null || StringUtils.isBlank(detailsObj.toString())) {
+            return;
+        }
+
+        /* 2—LLM classification */
+        JsonNode aiJson = llmHelper.classify(detailsObj.toString());
+        if (aiJson == null || !aiJson.isObject()) {
+            return;
+        }
+
+        /* 3—one-time caption → API-field map for the current cate */
+        Map<String, String> captionToParam =
+                defs.getFilters().stream()
                         .collect(Collectors.toMap(ParametricFilterConfig.FilterDef::getCaption,
                                 ParametricFilterConfig.FilterDef::getParam));
-                aiJson.fields().forEachRemaining(e -> {
-                    String caption = e.getKey();              // e.g. "DC Rated Voltage"
-                    JsonNode value = e.getValue();
 
-                    /* 1) try direct lookup ------------------------------------------------ */
-                    String param = captionToParam.get(caption);
-
-                    /* 2) if not found, compare by word-set -------------------------------- */
-                    if (param == null) {
-                        Set<String> captionWords = tokens(caption);
-
-                        for (Map.Entry<String, String> entry : captionToParam.entrySet()) {
-                            if (tokens(entry.getKey()).equals(captionWords)) {
-                                param = entry.getValue();
-                                break;
-                            }
-                        }
-                    }
-                    /* 3) finally, add to the parameter map -------------------------------- */
-                    if (param != null) {
-                        renderScon(param, value)
-                                .forEach(s -> {
-                                    b.queryParam("scon", s);
-                                });
-                    } else {
-                        log.warn("No scon field mapping for caption “{}” (ignored)", caption);
-                    }
-                });
-            }
-        }
+        /* 4—iterate over LLM keys and mutate the URI builder */
+        aiJson.fields().forEachRemaining(entry ->
+                handleAiEntry(entry, captionToParam, b));
     }
 
-    private static Set<String> tokens(String s) {
+    /**
+     * Processes a single AI-derived filter entry by resolving its human-readable caption
+     * to the corresponding Murata API field name and adding the appropriate
+     * <code>scon</code> query parameters to the URI builder.
+     *
+     * <p>The resolution is performed via {@link #resolveApiField(String, Map)},
+     * which first attempts an exact caption lookup and then falls back to
+     * a word‐set comparison if needed.  Any captions without a matching API
+     * field are logged and ignored.</p>
+     *
+     * @param entry            a map entry from the AI output JSON,
+     *                         where the key is the UI caption (e.g. "Rated Voltage DC")
+     *                         and the value is the filter value node
+     * @param captionToParam   mapping from UI captions to Murata API <code>scon</code> field names
+     * @param uriBuilder       the <code>UriBuilder</code> used to accumulate query parameters;
+     *                         for each resolved field, one or more <code>scon</code> params
+     *                         will be appended via <code>queryParam("scon", ...)</code>
+     */
+    private void handleAiEntry(final Map.Entry<String, JsonNode> entry,
+                               final Map<String, String> captionToParam,
+                               final UriBuilder uriBuilder) {
+
+        String caption = entry.getKey();
+        JsonNode value = entry.getValue();
+
+        String field = resolveApiField(caption, captionToParam);
+        if (field == null) {
+            log.warn("No scon field mapping for caption “{}” (ignored)", caption);
+            return;
+        }
+        renderScon(field, value).forEach(scon -> uriBuilder.queryParam("scon", scon));
+    }
+
+    /**
+     * Resolves a UI filter caption to its Murata API field name.
+     * <p>This method first tries an exact lookup in the provided map.
+     * If that fails, it compares the set of words (ignoring order and punctuation)
+     * between the requested caption and each map key, returning the first match.</p>
+     *
+     * @param caption         the human-facing filter label, e.g. "Rated Voltage DC"
+     * @param captionToParam  map from exact captions to their Murata API <code>scon</code> names
+     * @return the matching API field name (e.g. "ceramicCapacitors-ratedVoltageDC"),
+     *         or {@code null} if no mapping could be found
+     */
+    @Nullable
+    private String resolveApiField(final String caption,
+                                   final Map<String, String> captionToParam) {
+
+        /* 1 – exact match */
+        String field = captionToParam.get(caption);
+        if (field != null) {
+            return field;
+        }
+
+        /* 2 – word-set comparison (e.g. “Rated Voltage DC” vs “DC Rated Voltage”) */
+        Set<String> captionTokens = tokens(caption);
+        return captionToParam.entrySet()
+                .stream()
+                .filter(e -> tokens(e.getKey()).equals(captionTokens))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static Set<String> tokens(final String s) {
         return WORD.matcher(s.toLowerCase(Locale.ROOT))
                 .results()
                 .map(MatchResult::group)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    private void buildSearchWithParameters(Map<String, Object> params, ParametricFilterConfig.CategoryFilters defs, UriBuilder b) {
+    private void buildSearchWithParameters(
+            final Map<String, Object> params, final ParametricFilterConfig.CategoryFilters defs, final UriBuilder b) {
         Map<String, String> captionToParam = defs.getFilters()
                 .stream()
                 .collect(Collectors.toMap(
@@ -353,11 +401,11 @@ public class MurataParametricSearchService
                         ParametricFilterConfig.FilterDef::getParam
                 ));
         params.forEach((key, value) -> {
-
             renderScon(captionToParam.get(key), value)
-                .forEach(s -> {
-                    b.queryParam("scon", s);
-                });});
+                    .forEach(s -> {
+                        b.queryParam("scon", s);
+                    });
+        });
     }
 
     private String getMpnParam(final Map<String, Object> params) {
@@ -409,6 +457,9 @@ public class MurataParametricSearchService
      * Build one “scon=” clause.
      *
      * <pre>
+     *   • field;10|10                // single literal
+     *   • field;100|200              // range {min,max}
+     *   • field;A,field;B            // multi-select list
      *   • single value            -> field;10|10
      *   • range  {"min":x,"max":y}-> field;x|y
      *   • list   [a,b,c]          -> field;a,b,c
@@ -433,76 +484,22 @@ public class MurataParametricSearchService
      * @return a list of properly‐encoded <code>scon</code> query strings
      * @throws IllegalArgumentException if the raw type is unsupported
      */
-//    private List<String> renderScon(final String field, final Object raw) {
-//        if (field == null) {
-//            return Collections.emptyList();
-//        }
-//        var sb = new StringBuilder(field).append(';');
-//
-//        /* ---------- single literal ------------------------------------------------ */
-//        if (raw instanceof CharSequence || raw instanceof Number) {
-//            return List.of(sb.append(raw).toString());
-//        }
-//
-//        /* ---------- range {min,max} ------------------------------------------------ */
-//        if (raw instanceof Map<?, ?> range) {                 // we already know the shape
-//            // ← explicit, safe cast
-//
-//            String min = Optional.ofNullable(range.get("min"))
-//                    .map(Object::toString)
-//                    .orElse("");
-//
-//            String max = Optional.ofNullable(range.get("max"))
-//                    .map(Object::toString)
-//                    .orElse("");
-//
-//            return List.of(sb.append(min).append('|').append(max).toString());
-//        }
-//
-//        /* ---------- multi‑value list ---------------------------------------------- */
-//        if (raw instanceof Collection<?> col) {
-//            return col.stream()
-//                    .map(val -> field + ';' + val)
-//                    .toList();
-//        }
-//        throw new IllegalArgumentException(
-//                "Unsupported parameter value for scon: " + raw.getClass());
-//    }
-
-    /**
-     * Builds one or more “scon=” fragments for the given filter field.
-     *
-     * <pre>
-     * field;10|10                // single literal
-     * field;100|200              // range {min,max}
-     * field;A,field;B            // multi-select list
-     * </pre>
-     *
-     * @param field the Murata filter key (e.g. {@code ceramicCapacitors-capacitance})
-     * @param raw   the value supplied by the caller (scalar, list, or range)
-     * @return list of fully-formed {@code scon} strings
-     */
     private List<String> renderScon(final String field, final Object raw) {
 
         if (field == null) {
             return Collections.emptyList();
         }
 
-        /* --------------------------------------------------------------------- */
-        /* 1) simple literal – String, Number, Boolean                           */
-        /* --------------------------------------------------------------------- */
+        // 1) simple literal – String, Number, Boolean
         if (raw instanceof CharSequence
                 || raw instanceof Number
                 || raw instanceof Boolean
                 || (raw instanceof JsonNode node && node.isValueNode())) {
-//            return List.of(field + ';' + raw);
             String val = (raw instanceof JsonNode n) ? n.asText() : raw.toString();
             return List.of(field + ';' + val);
         }
 
-        /* --------------------------------------------------------------------- */
-        /* 2) range supplied as java.util.Map {min,max}                          */
-        /* --------------------------------------------------------------------- */
+        // 2) range supplied as java.util.Map {min,max}
         if (raw instanceof Map<?, ?> range) {
             String min = Optional.ofNullable(range.get("min"))
                     .map(Object::toString)
@@ -513,9 +510,7 @@ public class MurataParametricSearchService
             return List.of(field + ';' + min + '|' + max);
         }
 
-        /* --------------------------------------------------------------------- */
-        /* 3) range supplied as Jackson ObjectNode {"min":…,"max":…}             */
-        /* --------------------------------------------------------------------- */
+        // 3) range supplied as Jackson ObjectNode {"min":…,"max":…}
         if (raw instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
             String min = Optional.ofNullable(node.get("min"))
                     .map(JsonNode::asText)
@@ -526,22 +521,16 @@ public class MurataParametricSearchService
             return List.of(field + ';' + min + '|' + max);
         }
 
-        /* --------------------------------------------------------------------- */
-        /* 4) multi-select list                                                  */
-        /* --------------------------------------------------------------------- */
+        // 4) multi-select list
         if (raw instanceof Collection<?> col) {
             return col.stream()
                     .map(val -> field + ';' + val)
                     .toList();
         }
 
-        /* --------------------------------------------------------------------- */
-        /* 5) unsupported value type                                             */
-        /* --------------------------------------------------------------------- */
+        // 5) unsupported value type
         throw new IllegalArgumentException(
                 "Unsupported parameter value for scon (" + field + "): "
                         + raw.getClass().getName());
     }
-
-
 }
