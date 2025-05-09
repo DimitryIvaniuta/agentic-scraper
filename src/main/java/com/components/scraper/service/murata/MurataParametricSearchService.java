@@ -490,16 +490,9 @@ public class MurataParametricSearchService
             return Collections.emptyList();
         }
 
-        // 1) simple literal – String, Number, Boolean
-        if (raw instanceof CharSequence
-                || raw instanceof Number
-                || raw instanceof Boolean
-                || (raw instanceof JsonNode node && node.isValueNode())) {
-            String val = (raw instanceof JsonNode n) ? n.asText() : raw.toString();
-            return List.of(field + ';' + val);
-        }
 
-        // 2) range supplied as java.util.Map {min,max}
+
+        // range supplied as java.util.Map {min,max}
         if (raw instanceof Map<?, ?> range) {
             String min = Optional.ofNullable(range.get("min"))
                     .map(Object::toString)
@@ -510,25 +503,36 @@ public class MurataParametricSearchService
             return List.of(field + ';' + min + '|' + max);
         }
 
-        // 3) range supplied as Jackson ObjectNode {"min":…,"max":…}
+        // range supplied as Jackson ObjectNode {"min":…,"max":…}
         if (raw instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
-            String min = Optional.ofNullable(node.get("min"))
+            String min = node.path("min").isMissingNode()
+                    ? "0" : Optional.ofNullable(node.get("min"))
                     .map(JsonNode::asText)
                     .orElse("");
-            String max = Optional.ofNullable(node.get("max"))
+            String max = node.path("max").isMissingNode()
+                    ? String.valueOf(Integer.MAX_VALUE) : Optional.ofNullable(node.get("max"))
                     .map(JsonNode::asText)
                     .orElse("");
             return List.of(field + ';' + min + '|' + max);
         }
 
-        // 4) multi-select list
+        // multi-select list
         if (raw instanceof Collection<?> col) {
             return col.stream()
                     .map(val -> field + ';' + val)
                     .toList();
         }
 
-        // 5) unsupported value type
+        // simple literal – String, Number, Boolean
+        if (raw instanceof CharSequence
+                || raw instanceof Number
+                || raw instanceof Boolean
+                || (raw instanceof JsonNode node && node.isValueNode())) {
+            String val = (raw instanceof JsonNode n) ? n.asText() : raw.toString();
+            return List.of(field + ';' + val);
+        }
+
+        // unsupported value type
         throw new IllegalArgumentException(
                 "Unsupported parameter value for scon (" + field + "): "
                         + raw.getClass().getName());
