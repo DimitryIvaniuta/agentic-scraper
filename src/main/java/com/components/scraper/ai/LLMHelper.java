@@ -1,10 +1,12 @@
 package com.components.scraper.ai;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.decorators.Decorators;
 import io.github.resilience4j.retry.Retry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.components.scraper.config.OpenAIProperties;
@@ -53,6 +55,20 @@ public class LLMHelper {
             "luPowerModules",
             "cgsubTrimmPoten"
     );
+
+    private static final String PARAMETRIC_SYS_PROMPT =
+            """
+            You are an expert on Murata’s parametric search.
+            Given an English requirements sentence, output ONLY
+            a **valid JSON object** whose KEYS are the exact filter
+            CAPTIONS and whose VALUES use these shapes:
+    
+              • literal value.............. 12
+              • range object............... {"min":100,"max":200}
+              • multi-select list.......... ["A","B","C"]
+    
+            Do not wrap the JSON in code-blocks or Markdown.
+            """;
 
     /**
      * OpenAI content message text.
@@ -291,5 +307,61 @@ public class LLMHelper {
             prompt += "\n\n(Note: On retry, please be even more concise.)";
         }
         return prompt;
+    }
+
+
+    /**
+     * @param details  free-form user description
+     * @return parsed JsonNode (object) or <code>null</code> on failure
+     */
+    public @Nullable JsonNode classify(String details) {
+
+        Map<String,Object> payload = Map.of(
+                "model",        props.getDefaultModel(),
+                "temperature",  0,
+                "messages", List.of(
+                        Map.of("role","system", "content", PARAMETRIC_SYS_PROMPT),
+                        Map.of("role","user",   "content", details)
+                )
+        );
+
+        Supplier<JsonNode> call = () -> openAiClientWeb.post()
+                .uri(props.getBaseUrl() + "/chat/completions")
+                .bodyValue(payload)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block();
+
+/*        JsonNode root = Decorators.ofSupplier(call)
+                .withRetry(retry)
+                .withCircuitBreaker(cb)
+                .recover(e -> null)
+                .decorate()
+                .get();*/
+        JsonNode root = Decorators.ofSupplier(call)
+                .withRetry(retry)
+                .withCircuitBreaker(circuitBreaker)
+                .withFallback(                         // ← instead of .recover(…)
+                        List.of(Exception.class),          // catch everything
+                        ex -> null                         // graceful-fail → null
+                )
+                .withFallback(
+                        List.of(Exception.class),
+                        ex -> {
+                            log.warn("AI parameters lookup failed: {}", ex.toString());
+                            return null;
+                        })
+                .decorate()
+                .get();
+
+        if (root == null) return null;
+
+        String json = root.at("/choices/0/message/content").asText("");
+        log.info("");
+        try {
+            return new ObjectMapper().readTree(json);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 }

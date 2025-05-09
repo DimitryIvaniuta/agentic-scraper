@@ -3,6 +3,7 @@ spring:
     import:
       - optional:dotenv:.env
       - optional:classpath:parametric-filters.yml
+      - optional:classpath:murata-categories.yml
 
 openai:
   api:

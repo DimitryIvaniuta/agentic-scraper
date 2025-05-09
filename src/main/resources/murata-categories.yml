@@ -1,0 +1,153 @@
+# ---------------------------------------------------------------------------
+#  Purpose: translate a human-friendly  Category / Sub-category  path into the
+#           exact **cate** code required by Murata’s PsdispRest Web-API.
+#
+#  Structure (list-of-objects) is IDE-friendly – no exotic map-keys → zero
+#  warnings from Spring-Boot configuration inspection.
+# ---------------------------------------------------------------------------
+
+murata:
+  path-to-cate:
+    #  Capacitors 
+    - path : "Capacitors/Ceramic Capacitors(SMD)"
+      cate : luCeramicCapacitorsSMD
+
+    - path : "Capacitors/Ceramic Capacitors(Lead)"
+      cate : luCeramicCapacitorsLead
+
+    - path : "Capacitors/Polymer Aluminium Electrolytic Capacitors"
+      cate : luPolymerAlEcap
+
+    - path : "Capacitors/Film Capacitors"
+      cate : luFilmCapacitors
+
+    - path : "Capacitors/Supercapacitors(EDLC)"
+      cate : luEDLCCapacitors
+
+    - path : "Capacitors/Capacitor Arrays"
+      cate : luCapacitorArray
+
+
+    #  Inductors & Coils 
+    - path : "Inductors/Inductor (Wire-wound)"
+      cate : luInductorWirewound
+
+    - path : "Inductors/Inductor (Multilayer)"
+      cate : luInductorMultilayer
+
+    - path : "Inductors/Power Inductors (Metal)"
+      cate : luInductorSMDMetal
+
+    - path : "Inductors/Power Inductors (Ferrite)"
+      cate : luInductorSMDFerrite
+
+    - path : "Inductors/DC-DC Converter Modules"
+      cate : luPowerModules
+
+
+    #  EMI / EMC Components 
+    - path : "EMI / EMC/EMI-Filter (Chip Beads)"
+      cate : luEMIFiltersChipBeads
+
+    - path : "EMI / EMC/EMI-Filter (Arrays)"
+      cate : luEMIFiltersArrays
+
+    - path : "EMI / EMC/EMI Filters (SMD)"
+      cate : luEMIFiltersSMD
+
+    - path : "EMI / EMC/EMI Filters (Lead)"
+      cate : luEMIFiltersLead
+
+
+    #  Thermistors & Temperature Sensors 
+    - path : "Thermistors/NTC"
+      cate : luThermistorsNTC
+
+    - path : "Thermistors/PTC"
+      cate : luThermistorsPTC
+
+    - path : "Thermistors/Temperature Sensors"
+      cate : luTemperatureSensors
+
+
+    #  Frequency Devices 
+    - path : "Frequency Devices/Ceramic Resonators CERALOCK"
+      cate : luResonatorsCeralock
+
+    - path : "Frequency Devices/Crystals"
+      cate : luCrystalUnit
+
+    - path : "Frequency Devices/SAW Resonators"
+      cate : luSAWResonators
+
+    - path : "Frequency Devices/SAW Filters"
+      cate : luSAWFilters
+
+
+    #  Filters & RF Modules 
+    - path : "RF Filters/SAW Filters"
+      cate : luSAWFilters             # duplicate path→cate is OK
+
+    - path : "RF Modules/Bluetooth® Modules"
+      cate : luBTModule
+
+    - path : "RF Modules/WLAN Modules"
+      cate : luWLANModule
+
+    - path : "RF Modules/UWB Modules"
+      cate : luUWBModule
+
+
+    #  Sensors 
+    - path : "Sensors/Acceleration Sensors"
+      cate : luAccelSensors
+
+    - path : "Sensors/Gyro Sensors"
+      cate : luGyroSensors
+
+    - path : "Sensors/Pressure Sensors"
+      cate : luPressureSensors
+
+    - path : "Sensors/Temperature & Humidity Sensors"
+      cate : luTempHumiditySensors
+
+    - path : "Sensors/Pyroelectric Sensors"
+      cate : luSensorsPyroelectric
+
+
+    #  Sound Components 
+    - path : "Sound Components/Piezoelectric Sound Components"
+      cate : luPiezoSoundComponents
+
+    - path : "Sound Components/Ultrasonic Transducers"
+      cate : luUltrasonicTransducer
+
+    - path : "Sound Components/Speakers"
+      cate : luSpeakers
+
+
+    #  Timing-Control & Power ICs 
+    - path : "Timing Devices/RTC Modules"
+      cate : luRTCModule
+
+    - path : "Power/Charge & Discharge Protection IC"
+      cate : luLiIonProtectIC
+
+    - path : "Power/Power Management IC"
+      cate : luPMIC
+
+
+    #  Potentiometers / Trimmers 
+    - path : "Trimmer Potentiometers"
+      cate : cgsubTrimmPoten
+
+
+    #  Connectivity / RF Front-end 
+    - path : "Connectivity/LTCC Filters"
+      cate : luLTCCFilters
+
+    - path : "Connectivity/Isolators (RF)"
+      cate : luRFIsolators
+
+    - path : "Connectivity/Antenna Devices"
+      cate : luAntennaDevices
