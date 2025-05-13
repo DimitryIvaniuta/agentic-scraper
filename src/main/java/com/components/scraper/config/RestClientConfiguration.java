@@ -1,12 +1,12 @@
 package com.components.scraper.config;
 
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.client.RestClient;
-
 
 /**
  * Spring configuration for creating a pre-configured {@link RestClient} bean
@@ -16,7 +16,7 @@ import org.springframework.web.client.RestClient;
  * <ul>
  *   <li>Leaving the base URL blank (individual services supply their own absolute URIs).</li>
  *   <li>Setting a default "Accept: application/json" header.</li>
- *   <li>Replacing the default Jackson message converter’s ObjectMapper
+ *   <li>Replacing the default Jackson message converterGÇÖs ObjectMapper
  *       with the scraper-specific one (qualified "scraperObjectMapper").</li>
  * </ul>
  */

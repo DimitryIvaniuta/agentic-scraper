@@ -1,8 +1,10 @@
 package com.components.scraper.config;
 
+import lombok.Data;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -81,6 +83,36 @@ public class VendorCfg {
      * <p>Key is the uppercase 3-character prefix, value is the "cate" parameter.</p>
      */
     private Map<String, String> crossRefCategories = new HashMap<>();
+
+    /**
+     * Whether the scraper bean should be active
+     */
+    private boolean enabled = true;
+
+    /**
+     * API page size (where the vendor supports paging)
+     */
+    private int pageSize = 20;
+
+    /**
+     * Blocking timeout for one complete search
+     */
+    private Duration timeout = Duration.ofSeconds(10);
+
+    /**
+     * Simple client‑side rate limiting
+     */
+    private RateLimit rateLimit = new RateLimit();
+
+    @Data
+    public static class RateLimit {
+
+        /** Allowed number of HTTP requests per second */
+        private int permitsPerSecond = 5;
+
+        /** Max burst capacity */
+        private int burst = 5;
+    }
 }
 
 

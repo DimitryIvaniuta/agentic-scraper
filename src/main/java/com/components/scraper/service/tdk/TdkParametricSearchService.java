@@ -7,6 +7,7 @@ import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -14,7 +15,7 @@ import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -57,10 +58,11 @@ public class TdkParametricSearchService
     public TdkParametricSearchService(
             @Qualifier("tdkGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
-            final RestClient client,
-            final LLMHelper llmHelper
+            final WebClient.Builder builder,
+            final LLMHelper llmHelper,
+            @Qualifier("scraperObjectMapper") ObjectMapper om
     ) {
-        super(factory.forVendor("tdk"), client, llmHelper);
+        super(factory.forVendor("tdk"), builder, llmHelper, parser, om);
         this.parser = parser;
     }
 
@@ -75,7 +77,7 @@ public class TdkParametricSearchService
 
         MultiValueMap<String, String> q = buildQueryParams(category, subcategory, parameters);
 
-        JsonNode root = safeGet(ub -> buildUri(
+        JsonNode root = safeGet(buildUri(
                 getCfg().getBaseUrl(),            // e.g. https://product.tdk.com
                 getCfg().getParametricSearchUrl(),     // e.g. /en/search/productsearch
                 q));

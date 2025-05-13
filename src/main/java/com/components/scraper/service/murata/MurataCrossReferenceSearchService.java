@@ -6,11 +6,14 @@ import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.CrossReferenceSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
-import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -62,28 +65,23 @@ public class MurataCrossReferenceSearchService
     private static final int DEFAULT_ROWS = 20;
 
     /**
-     * Parser that converts a JSON grid section into a list of field→value maps.
-     */
-    private final JsonGridParser parser;
-
-    /**
      * Constructs a new {@code MurataCrossReferenceSearchService} with the given
      * JSON grid parser, vendor configuration factory, HTTP client, and LLM helper.
      * This service performs cross‑reference lookups against Murata’s WebAPI.
      *
      * @param parser      the {@link JsonGridParser} to transform JSON grid sections into record maps
      * @param factory     the {@link VendorConfigFactory} to obtain Murata-specific configuration
-     * @param client      the HTTP client ({@link org.springframework.web.client.RestClient}) for API calls
+     * @param builder      the HTTP client Builder for API calls
      * @param llmHelper   the {@link LLMHelper} for optional AI‑based category discovery
      */
     public MurataCrossReferenceSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
-            final RestClient client,
-            final LLMHelper llmHelper
+            final WebClient.Builder builder,
+            final LLMHelper llmHelper,
+            @Qualifier("scraperObjectMapper") ObjectMapper om
     ) {
-        super(factory.forVendor("murata"), client, llmHelper);
-        this.parser = parser;
+        super(factory.forVendor("murata"), builder, llmHelper, parser, om);
     }
 
     /**
@@ -116,32 +114,50 @@ public class MurataCrossReferenceSearchService
         String competitorMpnFixed = competitorMpn.replace("#", "").trim();
 
         // Perform the HTTP GET against Murata’s cross-reference WebAPI
-        JsonNode root = safeGet(ub -> {
-            URI base = URI.create(getCfg().getBaseUrl());   // e.g. https://www.murata.com
+//        JsonNode root = safeGet(ub -> {
+//            URI base = URI.create(getCfg().getBaseUrl());   // e.g. https://www.murata.com
+//
+//            // apply scheme + host (and port if present)
+//            ub = ub.scheme(base.getScheme())
+//                    .host(base.getHost());
+//            if (base.getPort() != -1) {                     // port is -1 when absent
+//                ub = ub.port(base.getPort());
+//            }
+//
+//            // prepend any path segment that is already part of base‑url
+//            String basePath = base.getPath();
+//            if (StringUtils.hasText(basePath) && !"/".equals(basePath)) {
+//                ub = ub.path(basePath);                     // e.g. "" or "/"
+//            }
+//
+//            /* endpoint + query parameters */
+//            return ub.path(getCfg().getCrossRefUrl())     // /webapi/PsdispRest
+//                    .queryParam("cate", cateValue)
+//                    .queryParam("partno", competitorMpnFixed)
+//                    .queryParam("stype", 1)
+//                    .queryParam("pageno", 1)
+//                    .queryParam("rows", DEFAULT_ROWS)
+//                    .queryParam("lang", "en-us")
+//                    .build();
+//        });
 
-            // apply scheme + host (and port if present)
-            ub = ub.scheme(base.getScheme())
-                    .host(base.getHost());
-            if (base.getPort() != -1) {                     // port is -1 when absent
-                ub = ub.port(base.getPort());
-            }
+        /* Prepare query parameters */
+        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
+        q.add("cate",    cateForCrossRef(competitorMpn));  // vendor-specific helper
+        q.add("partno",  competitorMpn.replaceAll("[^A-Za-z0-9]", ""));
+        q.add("stype",   "1");
+        q.add("pageno",  "1");
+        q.add("rows",    String.valueOf(DEFAULT_ROWS));
+        q.add("lang",    "en-us");
 
-            // prepend any path segment that is already part of base‑url
-            String basePath = base.getPath();
-            if (StringUtils.hasText(basePath) && !"/".equals(basePath)) {
-                ub = ub.path(basePath);                     // e.g. "" or "/"
-            }
+        /* Build absolute URI with the shared helper */
+        URI uri = buildUri(
+                getCfg().getBaseUrl(),      // e.g. https://www.murata.com
+                getCfg().getCrossRefUrl(),  // e.g. /webapi/SearchCrossReference
+                q);
 
-            /* endpoint + query parameters */
-            return ub.path(getCfg().getCrossRefUrl())     // /webapi/PsdispRest
-                    .queryParam("cate", cateValue)
-                    .queryParam("partno", competitorMpnFixed)
-                    .queryParam("stype", 1)
-                    .queryParam("pageno", 1)
-                    .queryParam("rows", DEFAULT_ROWS)
-                    .queryParam("lang", "en-us")
-                    .build();
-        });
+        /* Hit the endpoint through the WebClient-backed helper */
+        JsonNode root = safeGet(uri);
 
         if (root == null) {
             return Collections.emptyList();
@@ -183,7 +199,7 @@ public class MurataCrossReferenceSearchService
             log.warn("Missing grid section {}", key);
             return Collections.emptyList();
         }
-        return parser.parse(section);
+        return getParser().parse(section);
     }
 
     /**

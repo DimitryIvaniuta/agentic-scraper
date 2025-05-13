@@ -7,14 +7,16 @@ import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.util.UriBuilder;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
 import java.util.Collection;
@@ -60,12 +62,6 @@ public class MurataParametricSearchService
     private static final String PATH_DELIMITER = "/";
 
     /**
-     * The injected JSON‐grid parser that transforms a Murata JSON payload
-     * into a list of row‐maps.
-     */
-    private final JsonGridParser parser;
-
-    /**
      * All parametric‐filter definitions loaded from YAML.
      */
     private final ParametricFilterConfig filterConfig;
@@ -92,13 +88,13 @@ public class MurataParametricSearchService
     public MurataParametricSearchService(
             @Qualifier("murataGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
-            final RestClient client,
+            final WebClient.Builder builder,
             final LLMHelper llmHelper,
+            @Qualifier("scraperObjectMapper") ObjectMapper om,
             final ParametricFilterConfig filterConfig,
             final MurataCateResolver cateResolver
     ) {
-        super(factory.forVendor("murata"), client, llmHelper);
-        this.parser = parser;
+        super(factory.forVendor("murata"), builder, llmHelper, parser, om);
         this.filterConfig = filterConfig;
         this.cateResolver = cateResolver;
     }
@@ -140,13 +136,15 @@ public class MurataParametricSearchService
         String cateByMpn = discoverCate(getMpnParam(parameters));
         String cate = resolveCate(category, subcategory, cateByMpn);
 
-        JsonNode root = safeGet(uriBuilder(cate, parameters, maxResults));
-        if (root == null) {
+        URI uri = buildParametricUri(cate, parameters, maxResults);
+
+        JsonNode root = safeGet(uri);
+        if (root == null || root.isEmpty()) {
             return Collections.emptyList();
         }
 
         // 5) Parse Murata grid
-        List<Map<String, Object>> rows = parser.parse(root);
+        List<Map<String, Object>> rows = getParser().parse(root);
 
         // 6) Respect maxResults and return
         return rows.size() > maxResults
@@ -178,59 +176,32 @@ public class MurataParametricSearchService
         return cateResolver.cateFor(normalisedPath);
     }
 
-    /**
-     * As Murata repeats {@code scon=} for every filter, we must build an URI
-     * with multiple identical query‑parameter keys.  This helper returns an
-     * {@link UriBuilder}‑&gt;{@link URI} lambda ready for {@code RestClient}.
-     * Builds a URI‐factory function which adds:
-     * <ul>
-     *   <li>Repeated <code>scon</code> query parameters (one per filter),</li>
-     *   <li>Standard Murata params: <code>stype=1</code>, <code>lang=en-us</code>, etc.</li>
-     * </ul>
-     *
-     * @param cate   the category code
-     * @param params map of filters (keys → scon fields, values → various shapes)
-     * @param rows   max rows to request
-     * @return a lambda suitable for {@link #safeGet(Function)}
-     */
-    private Function<UriBuilder, URI> uriBuilder(final String cate,
-                                                 final Map<String, Object> params,
-                                                 final int rows) {
-        return ub -> {
+    private URI buildParametricUri(String cate,
+                                   Map<String,Object> params,
+                                   int rows) {
 
-            URI base = URI.create(getCfg().getBaseUrl());   // e.g. https://www.murata.com
+        /* Base query string ----------------------------------------- */
+        MultiValueMap<String,String> q = new LinkedMultiValueMap<>();
+        q.add("cate",   cate);
+        q.add("partno", getMpnParam(params));
+        q.add("stype",  "1");
+        q.add("rows",   String.valueOf(rows));
+        q.add("lang",   "en-us");
 
-            // apply scheme + host (and port if present)
-            ub = ub.scheme(base.getScheme())
-                    .host(base.getHost());
-            if (base.getPort() != -1) {                     // port is -1 when absent
-                ub = ub.port(base.getPort());
-            }
+        /* Extra “scon” filters -------------------------------------- */
+        ParametricFilterConfig.CategoryFilters defs =
+                filterConfig.getCategoryFilters("murata", cate);
 
-            // prepend any path segment that is already part of base‑url
-            String basePath = base.getPath();
-            if (org.springframework.util.StringUtils.hasText(basePath) && !"/".equals(basePath)) {
-                ub = ub.path(basePath);                     // e.g. "" or "/"
-            }
+        if (defs != null) {
+            buildDetailsQueryParameters(params, defs, q);     // unchanged helpers
+            buildSearchWithParameters   (params, defs, q);
+        }
 
-            UriBuilder b = ub
-                    .path(getCfg().getParametricSearchUrl())    // usually /webapi/PsdispRest
-                    .queryParam("cate", cate)
-                    .queryParam("partno", getMpnParam(params))
-                    .queryParam("stype", 1)
-                    .queryParam("rows", rows)
-                    .queryParam("lang", "en-us");
-
-            /* add one “scon” parameter per filter */
-            // load filter definitions for this category
-            ParametricFilterConfig.CategoryFilters defs = filterConfig.getCategoryFilters("murata", cate);
-
-            if (defs != null) {
-                buildDetailsQueryParameters(params, defs, b);
-                buildSearchWithParameters(params, defs, b);
-            }
-            return b.build();
-        };
+        /* Delegate to VendorSearchEngine helper --------------------- */
+        return buildUri(
+                getCfg().getBaseUrl(),            // https://www.murata.com (may include path)
+                getCfg().getParametricSearchUrl(),// e.g. /webapi/PsdispRest
+                q);
     }
 
     /**
@@ -296,7 +267,7 @@ public class MurataParametricSearchService
      */
     private void buildDetailsQueryParameters(final Map<String, Object> params,
                                              final ParametricFilterConfig.CategoryFilters defs,
-                                             final UriBuilder b) {
+                                             final MultiValueMap<String,String> q) {
 
         /* 1—short-circuit if “details” is missing or blank */
         Object detailsObj = params.get("details");
@@ -318,7 +289,7 @@ public class MurataParametricSearchService
 
         /* 4—iterate over LLM keys and mutate the URI builder */
         aiJson.fields().forEachRemaining(entry ->
-                handleAiEntry(entry, captionToParam, b));
+                handleAiEntry(entry, captionToParam, q));
     }
 
     /**
@@ -341,7 +312,7 @@ public class MurataParametricSearchService
      */
     private void handleAiEntry(final Map.Entry<String, JsonNode> entry,
                                final Map<String, String> captionToParam,
-                               final UriBuilder uriBuilder) {
+                               final MultiValueMap<String,String> q) {
 
         String caption = entry.getKey();
         JsonNode value = entry.getValue();
@@ -351,7 +322,10 @@ public class MurataParametricSearchService
             log.warn("No scon field mapping for caption “{}” (ignored)", caption);
             return;
         }
-        renderScon(field, value).forEach(scon -> uriBuilder.queryParam("scon", scon));
+        renderScon(field, value).forEach(scon -> {
+            q.add("scon", scon);
+            //uriBuilder.queryParam("scon", scon)
+        });
     }
 
     /**
@@ -393,9 +367,10 @@ public class MurataParametricSearchService
     }
 
     private void buildSearchWithParameters(
-            final Map<String, Object> params, final ParametricFilterConfig.CategoryFilters defs, final UriBuilder b) {
-        Map<String, String> captionToParam = defs.getFilters()
-                .stream()
+            final Map<String, Object> params,
+            final ParametricFilterConfig.CategoryFilters defs,
+            final MultiValueMap<String, String> q) {
+        Map<String, String> captionToParam = defs.getFilters().stream()
                 .collect(Collectors.toMap(
                         ParametricFilterConfig.FilterDef::getCaption,
                         ParametricFilterConfig.FilterDef::getParam
@@ -403,9 +378,22 @@ public class MurataParametricSearchService
         params.forEach((key, value) -> {
             renderScon(captionToParam.get(key), value)
                     .forEach(s -> {
-                        b.queryParam("scon", s);
+                        q.add("scon", s);
+//                        b.queryParam("scon", s);
                     });
         });
+//        params.forEach((k, v) -> {
+//            if (v == null) return;
+//            String apiField = captionToParam.get(k);
+//            if (apiField == null) return;
+//
+//            /* Murata convention: LIKE operator is “LK” */
+//            if (v instanceof Collection<?> col) {
+//                col.forEach(item -> q.add("scon", apiField + "|LK|" + item));
+//            } else {
+//                q.add("scon", apiField + "|LK|" + v);
+//            }
+//        });
     }
 
     private String getMpnParam(final Map<String, Object> params) {

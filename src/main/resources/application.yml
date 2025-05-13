@@ -4,6 +4,8 @@ spring:
       - optional:dotenv:.env
       - optional:classpath:parametric-filters.yml
       - optional:classpath:murata-categories.yml
+      - optional:classpath:vendors.yml
+      - optional:classpath:scraper.yml
 
 openai:
   api:
@@ -20,37 +22,6 @@ resilience4j:
         retry-exceptions:
           - org.springframework.web.client.HttpClientErrorException
           - org.springframework.web.client.ResourceAccessException
-vendors:
-  configs:
-    murata:
-      base-url: https://www.murata.com
-      base-url-sitesearch: https://sitesearch.murata.com
-      mpn-search-path: /webapi/PsdispRest
-      mpn-search-product: /search/product
-      cross-ref-url: /webapi/SearchCrossReference
-      parametric-search-url: /webapi/PsdispRest
-      default-cate: luCeramicCapacitorsSMD
-      cross-ref-default-cate: cgInductorscrossreference
-      categories:                                           # prefix → “cate” code
-        GRM: luCeramicCapacitorsSMD
-        GCM: luCeramicCapacitorsSMD
-        LQH: luInductorSMD
-        LQM: luInductorChip
-        LQW: luInductorWirewound
-        BLM: luEMIFiltersSMD
-        PKL: luPiezoSoundComponents
-        NFM: luEMIPiFiltersSMD
-      cross-ref-categories:        # prefix    → cate code
-        LQH: cgInductorscrossreference
-        LQM: cgInductorscrossreference
-        LQW: cgInductorscrossreference
-        GRM: cgCapacitorscrossreference
-        GCM: cgCapacitorscrossreference
-        BLM: cgEmifilterscrossreference
-    tdk:
-      base-url: https://product.tdk.com
-      mpn-search-path: /en/search/productsearch
-      cross-ref-url: https://product.tdk.com/crossreference
 
 logging:
   level:

@@ -5,6 +5,9 @@ import java.util.Map;
 
 /**
  * Defines a contract for searching products by their Manufacturer Part Number (MPN).
+ * 1. Public contract – all vendor search beans implement {@link MpnSearchService}.
+ * 2. Registry – Spring wires every implementation for one-stop lookup.
+ * 3. TDK implementation – honouring centralised YAML (`scraper.tdk.*`).
  * <p>
  * Implementations of this interface encapsulate the logic necessary to query
  * a specific vendor's catalog—whether via HTTP APIs, web scraping, or other mechanisms—
@@ -14,6 +17,12 @@ import java.util.Map;
 public interface MpnSearchService {
 
     /**
+     * @return The canonical vendor name this service represents (e.g. "TDK", "Murata").
+     */
+    String vendor();
+
+    /**
+     * Performs a vendor specific part‑number search.
      * Searches for products matching the provided manufacturer part number (MPN).
      * <p>
      * The returned list contains one entry per matching product. Each map represents

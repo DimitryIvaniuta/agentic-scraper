@@ -1,0 +1,42 @@
+vendors:
+  max-page-size: 100
+  configs:
+    murata:
+      base-url: https://www.murata.com
+      base-url-sitesearch: https://sitesearch.murata.com
+      mpn-search-path: /webapi/PsdispRest
+      mpn-search-product: /search/product
+      cross-ref-url: /webapi/SearchCrossReference
+      parametric-search-url: /webapi/PsdispRest
+      default-cate: luCeramicCapacitorsSMD
+      cross-ref-default-cate: cgInductorscrossreference
+      enabled: true
+      page-size: 20
+      timeout: 10s
+      rate-limit:
+        permits-per-second: 3
+      categories:                                           # prefix → “cate” code
+        GRM: luCeramicCapacitorsSMD
+        GCM: luCeramicCapacitorsSMD
+        LQH: luInductorSMD
+        LQM: luInductorChip
+        LQW: luInductorWirewound
+        BLM: luEMIFiltersSMD
+        PKL: luPiezoSoundComponents
+        NFM: luEMIPiFiltersSMD
+      cross-ref-categories:        # prefix    → cate code
+        LQH: cgInductorscrossreference
+        LQM: cgInductorscrossreference
+        LQW: cgInductorscrossreference
+        GRM: cgCapacitorscrossreference
+        GCM: cgCapacitorscrossreference
+        BLM: cgEmifilterscrossreference
+    tdk:
+      base-url: https://product.tdk.com
+      mpn-search-path: /pdc_api/en/search/list/search_result
+      cross-ref-url: https://product.tdk.com/crossreference
+      enabled: true
+      page-size: 20
+      timeout: 10s
+      rate-limit:
+        permits-per-second: 3

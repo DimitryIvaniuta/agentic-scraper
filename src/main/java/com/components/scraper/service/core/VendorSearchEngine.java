@@ -2,25 +2,37 @@ package com.components.scraper.service.core;
 
 import com.components.scraper.ai.LLMHelper;
 import com.components.scraper.config.VendorCfg;
+import com.components.scraper.parser.JsonGridParser;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.netty.channel.ChannelOption;
+import io.netty.handler.logging.LogLevel;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+
+
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.util.UriBuilder;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.netty.http.HttpProtocol;
+import reactor.netty.http.client.HttpClient;
+import reactor.netty.resources.ConnectionProvider;
+import reactor.netty.transport.logging.AdvancedByteBufFormat;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.function.Function;
 
 /**
  * <h2>VendorSearchEngine</h2>
@@ -39,7 +51,7 @@ import java.util.function.Function;
  */
 @Slf4j
 @Getter
-@RequiredArgsConstructor
+//@RequiredArgsConstructor
 public abstract class VendorSearchEngine {
 
     /**
@@ -54,9 +66,9 @@ public abstract class VendorSearchEngine {
     private final VendorCfg cfg;
 
     /**
-     * Pre‑configured synchronous RestClient instance for executing HTTP requests..
+     * Pre‑configured synchronous WebClient instance for executing HTTP requests..
      */
-    protected final org.springframework.web.client.RestClient client;
+    private final WebClient webClient;
 
     /**
      * LLMHelper to ask ChatGPT for the vendor’s real “cate” code.
@@ -64,43 +76,93 @@ public abstract class VendorSearchEngine {
     protected final LLMHelper llmHelper;
 
     /**
-     * Performs an HTTP GET to the URI produced by {@code uriFn}, returning
-     * a {@link JsonNode} body, or an empty node/​null if safe handling
-     * of HTTP errors is needed.
-     *
-     * @param uriFn function that builds the request URI from a {@link UriBuilder}
-     * @return parsed {@link JsonNode} response, or {@code null} for 404s,
-     * or empty object node for other I/O errors
-     * @throws IllegalStateException for 5xx error codes (unless 4xx client error)
+     * Parser that converts a JSON grid section into a list of field→value maps.
+     * The injected JSON‐grid parser that transforms a Murata JSON payload
+     * into a list of row‐maps.
      */
-    protected @Nullable JsonNode safeGet(@NonNull final Function<UriBuilder, URI> uriFn) {
-        try {
-            return client.get()
-                    .uri(uriFn)
-                    .retrieve()
-                    .body(JsonNode.class);
-        } catch (HttpServerErrorException ex) {
-            log.warn("Upstream {} returned {}: {} → returning empty JSON",
-                    cfg.getBaseUrl(),
-                    ex.getStatusCode(),
-                    ex.getResponseBodyAsString()
-            );
-        } catch (Exception ex) {
-            // any other I/O or mapping errors
-            log.error("safeGet failed for {} → returning empty JSON",
-                    uriFn, ex);
-        }
-        return JsonNodeFactory.instance.objectNode();
+    private final JsonGridParser parser;
+
+    private final ObjectMapper mapper;
+
+    private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(25);
+
+    protected VendorSearchEngine(VendorCfg cfg,
+                                 WebClient.Builder builder,
+                                 LLMHelper llmHelper,
+                                 JsonGridParser parser,
+                                 ObjectMapper mapper
+                                 ) {
+        this.cfg = cfg;
+        this.webClient = buildWebClient(builder);
+        this.llmHelper = llmHelper;
+        this.parser = parser;
+        this.mapper = mapper;
     }
 
-    /**
-     * Overload of safeGet(Function) for a prebuilt {@link URI}.
-     *
-     * @param uri the target endpoint URI
-     * @return parsed {@link JsonNode} response, or {@code null}/empty node
-     */
-    protected JsonNode safeGet(@NonNull final URI uri) {
-        return safeGet(ub -> uri);
+    protected JsonNode safeGet(URI uri) {
+        try {
+            return webClient.get()
+                    .uri(uri)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(JsonNode.class)//byte[].class
+                    .timeout(HTTP_TIMEOUT)
+//                    .map(this::toJson)
+                    .block();
+        } catch (Exception ex) {
+            log.warn("safeGet failed for {}: {}", uri, ex.toString());
+            return mapper.createObjectNode();
+        }
+    }
+
+    protected JsonNode safePost(URI uri, MultiValueMap<String,String> form) {
+        try {
+            return webClient.post()
+                    .uri(uri)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(BodyInserters.fromFormData(form))
+                    .accept(MediaType.APPLICATION_JSON)
+                    .retrieve()
+                    .bodyToMono(JsonNode.class)
+                    .timeout(HTTP_TIMEOUT)
+                    .block();
+        } catch (Exception ex) {
+            log.warn("safePost failed for {}: {}", uri, ex.toString());
+            return mapper.createObjectNode();
+        }
+    }
+
+    private WebClient buildWebClient(WebClient.Builder builder) {
+        // 1) Timeouts
+        Duration connectTimeout   = Duration.ofSeconds(20);
+        Duration responseTimeout  = Duration.ofSeconds(20);
+        Duration poolAcquireDelay = Duration.ofSeconds(2);
+
+        // 2) Connection pooling
+        ConnectionProvider pool = ConnectionProvider.builder("vendor-pool")
+                .maxConnections(50)
+                .pendingAcquireTimeout(poolAcquireDelay)
+                .build();
+
+        // 3) Build the Reactor-Netty HttpClient
+        HttpClient httpClient = HttpClient.create(pool)
+                .compress(true)
+                .protocol(HttpProtocol.H2, HttpProtocol.HTTP11) // HTTP/2 with HTTP/1.1 fallback
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
+
+                .responseTimeout(responseTimeout)
+                .wiretap("reactor.netty.http.client.HttpClient",
+                        LogLevel.DEBUG,
+                        AdvancedByteBufFormat.TEXTUAL);
+
+        // 4) Eagerly initialize the pipeline (DNS, SSL, codecs, HTTP/2 ALPN, etc.)
+        httpClient.warmup().block();
+
+        // 5) Build WebClient
+        return builder
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .defaultHeader(HttpHeaders.ACCEPT,          MediaType.APPLICATION_JSON_VALUE)
+                .build();
     }
 
     /**
@@ -129,7 +191,7 @@ public abstract class VendorSearchEngine {
             b.queryParams(q);
         }
 
-        return b.build(true).toUri();   // keep already‑encoded ‘|’ etc.
+        return b.build(false).toUri();   // keep already‑encoded ‘|’ etc.
     }
 
     /**

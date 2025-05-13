@@ -37,6 +37,8 @@ public class VendorProperties {
      */
     private final Map<String, VendorCfg> configs = new LinkedHashMap<>();
 
+    private Integer maxPageSize;
+
     /**
      * Alias for {@link #configs} for clearer naming in code.
      *
