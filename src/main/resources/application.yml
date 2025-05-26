@@ -27,5 +27,6 @@ logging:
   level:
     root: INFO
     org.springframework.cache: debug
+    reactor.netty.http.client.HttpClient: ERROR
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

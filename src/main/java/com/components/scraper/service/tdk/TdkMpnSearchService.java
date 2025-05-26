@@ -7,93 +7,133 @@ import com.components.scraper.service.core.MpnSearchService;
 import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import lombok.RequiredArgsConstructor;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
-import org.springframework.util.StringUtils;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static io.netty.util.CharsetUtil.UTF_8;
 
 /**
- * TDK implementation – scrapes product.tdk.com.
+ * <h2>TDK – Manufacturer Part-Number (MPN) Search Service</h2>
+ *
+ * <p>Scrapes the public JSON API at
+ * <code>https://product.tdk.com/pdc_api/en/search/list/search_result</code>
+ * and converts the HTML-grid fragment into a list of
+ * {@code Map&lt;String,Object&gt;} rows.</p>
+ *
+ * <p>Highlights:</p>
+ * <ul>
+ *   <li>Automatic warm-up: issues one <code>GET /en/search/list</code> per JVM
+ *       to discover the <em>site / group / design</em> constants and to obtain
+ *       the session cookie.</li>
+ *   <li>Connection-pooled, gzip-enabled {@link WebClient} inherited from
+ *       {@link VendorSearchEngine}.</li>
+ *   <li>Thread-safe caching of vendor constants via {@link AtomicReference}s.</li>
+ * </ul>
  */
 @Slf4j
 @Service("tdkMpnSvc")
 @ConditionalOnProperty(prefix = "scraper.configs.tdk", name = "enabled", havingValue = "true", matchIfMissing = true)
-//@RequiredArgsConstructor
 public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearchService {
 
+    /**
+     * Cache of compiled {@link Pattern}s – avoids recompilation overhead.
+     */
+    private static final Map<String, Pattern> PATTERN_CACHE =
+            new ConcurrentHashMap<>();
 
-//    /* =====  CONSTANTS  ===== */
-//    private static final URI SEARCH_URI = URI.create("https://product.tdk.com/pdc_api/en/search/list/search_result");
-//    private static final String ENTRY_PAGE = "https://product.tdk.com/en/search/list";
-
-    /* =====  COLLABORATORS  ===== */
-//    private final WebClient.Builder webClientBuilder;
-//    private final ScraperProperties scraperProps;
-
-    /* =====  STATE  ===== */
-    private final RestClient client;
-
+    /**
+     * Fallback <code>site</code> constant used before warm-up completes.
+     */
     private static final String DEFAULT_SITE = "FBNXDO0R";
+
+    /**
+     * Fallback <code>group</code> constant used before warm-up completes.
+     */
     private static final String DEFAULT_GROUP = "tdk_pdc_en";
+
+    /**
+     * Fallback <code>design</code> constant used before warm-up completes.
+     */
     private static final String DEFAULT_DESIGN = "producttdkcom-en";
 
-    private final AtomicReference<String> site    = new AtomicReference<>();
-    private final AtomicReference<String> group   = new AtomicReference<>();
-    private final AtomicReference<String> design  = new AtomicReference<>();
-//    private Bucket rateLimiter;                            // 1 bucket per service instance
+    /**
+     * Discovered value of <em>site</em> parsed from the warm-up page.
+     */
+    private final AtomicReference<String> site = new AtomicReference<>(DEFAULT_SITE);
+    /**
+     * Discovered value of <em>group</em> parsed from the warm-up page.
+     */
+    private final AtomicReference<String> group = new AtomicReference<>(DEFAULT_GROUP);
+    /**
+     * Discovered value of <em>design</em> parsed from the warm-up page.
+     */
+    private final AtomicReference<String> design = new AtomicReference<>(DEFAULT_DESIGN);
+    /**
+     * Warm-up tuning: Limit.
+     */
+    private static final int CHUNK_LIMIT = 2_048;          // 2 KB
+    /**
+     * Warm-up tuning: timeout.
+     */
+    private static final long WARMUP_TIMEOUT_S = 30;             // seconds
 
     /**
      * Constructs the Murata MPN search service.
      *
      * @param parser    JSON-grid parser bean qualified as "murataGridParser"
      * @param factory   factory for loading Murata vendor configuration
-     * @param builder    configured Webclient builder
+     * @param builder   configured Webclient builder
      * @param llmHelper LLMHelper to ask ChatGPT for the vendor’s real “cate” code
+     * @param om        Object Mapper
      */
     public TdkMpnSearchService(
+            // Parser that converts the TDK HTML grid into row maps
             @Qualifier("tdkGridParser") final JsonGridParser parser,
             final VendorConfigFactory factory,
             final WebClient.Builder builder,
             final LLMHelper llmHelper,
-            @Qualifier("scraperObjectMapper") ObjectMapper om,
-            RestClient client
+            @Qualifier("scraperObjectMapper") final ObjectMapper om
     ) {
         super(factory.forVendor("tdk"), builder, llmHelper, parser, om);
-        this.client = client;
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public String vendor() {
         return "TDK";
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
-    public List<Map<String, Object>> searchByMpn(String mpn) {
+    public List<Map<String, Object>> searchByMpn(final String mpn) {
         String cleaned = mpn.trim();
 
-        // Prepare constant form fields once (site, group, design, etc.)
+        // Build POST form. Prepare constant form fields once (site, group, design, etc.)
         MultiValueMap<String, String> baseForm = new LinkedMultiValueMap<>();
         baseForm.add("site", DEFAULT_SITE);
         baseForm.add("charset", "UTF-8");
@@ -103,153 +143,125 @@ public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearch
         baseForm.add("_l", String.valueOf(getCfg().getPageSize()));
         baseForm.add("_c", "part_no-part_no");
         baseForm.add("_d", "0");
+        baseForm.add("_p", "1");
+        baseForm.add("pn", cleaned);
 
-
+        // Call API
         URI endpoint = buildUri(getCfg().getBaseUrl(), getCfg().getMpnSearchPath(), null);
 
-//        List<Map<String, Object>> aggregated = new ArrayList<>();
+        baseForm.set("pn", cleaned);
 
-//        for (int page = 1; page <= getCfg().getPageSize(); page++) {
-//            baseForm.set("_p", String.valueOf(page));
-            baseForm.set("pn", cleaned);
+        JsonNode rsp = safePost(endpoint, baseForm);
 
-            JsonNode rsp = safePost(endpoint, baseForm);
-//            if (rsp == null || rsp.isEmpty()) {
-//                break;  // no response, abort
-//            }
+        List<Map<String, Object>> rows = getParser().parse(rsp);
 
-            List<Map<String,Object>> rows = getParser().parse(rsp);
-//            List<Map<String, Object>> hits = parsePage(rsp);
-//            if (rows.isEmpty()){
-//                break;
-//            }
-
-//            aggregated.addAll(rows);
-//            if (rows.size() < getCfg().getPageSize()) {
-//                break;       // last page was partial → no more pages
-//            }
-//        }
-
-        return rows;
-    }
-
-    protected JsonNode safePost1(URI uri, MultiValueMap<String, String> form) {
-        try {
-            log.info("start safe post1");
-            JsonNode node = client.post().uri(uri)
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .body(form)
-                    .retrieve()
-                    .body(JsonNode.class);
-            log.info("start safe post2");
-            return node;
-        } catch (HttpServerErrorException ex) {
-            log.warn("TDK upstream {} returned {}: {} → empty JSON",
-                    uri, ex.getStatusCode(), ex.getResponseBodyAsString());
-        } catch (Exception ex) {
-            log.error("safePost failed for {} → empty JSON", uri, ex);
-        }
-        return JsonNodeFactory.instance.objectNode();
-    }
-
-    private List<Map<String, Object>> parsePage3(JsonNode root) {
-        if (!root.hasNonNull("results")) return List.of();
-
-        String html = root.path("results").asText();
-        if (!StringUtils.hasText(html)) return List.of();
-
-        // Build column‑order map first
-        Map<Integer, String> idxToHeader = new HashMap<>();
-        for (JsonNode col : root.path("columns")) {
-            int order = col.path("column_order").asInt();
-            String name = col.path("column_name").asText();
-            idxToHeader.put(order, name);
-        }
-
-        Document table = Jsoup.parse(html);
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (Element tr : table.select("tr")) {
-            Elements tds = tr.select("td");
-            if (tds.isEmpty()) continue;
-
-            Map<String, Object> row = new LinkedHashMap<>();
-            for (int i = 0; i < tds.size(); i++) {
-                String header = idxToHeader.getOrDefault(i * 10, "col_" + i);
-                row.put(header, tds.get(i).text());
-            }
-
-            // Datasheet link if present
-            Element pdf = tr.selectFirst("a[href$=.pdf]");
-            if (pdf != null) {
-                row.put("datasheet", pdf.absUrl("href"));
-            }
-            rows.add(row);
-        }
         return rows;
     }
 
     /**
-     * Parse one page and apply business rules:
-     * <ul>
-     *     <li>Skip the first two rows (TDK renders two header rows).</li>
-     *     <li>Skip the last two rows if they are empty.</li>
-     *     <li>For "Catalog / Data Sheet" column put the PDF URL as value.</li>
-     *     <li>Return <strong>only</strong> the body rows—no column metadata.</li>
-     * </ul>
+     * <p>Initiates the warm-up sequence immediately after Spring instantiates
+     * the bean. The sequence:</p>
+     * <ol>
+     *   <li>Sends a <code>GET /en/search/list</code> to obtain the TDK session
+     *       cookie and to read the inline JavaScript that contains the
+     *       <em>site / group / design</em> constants.</li>
+     *   <li>Parses those constants and stores them in the {@link
+     *       #site}/{@link #group}/{@link #design} atomic references.</li>
+     *   <li>Caches the Mono so the HTTP call is executed exactly once.</li>
+     * </ol>
+     * <p>The method triggers the Mono asynchronously and also blocks once to
+     * make sure warm-up completes during application start-up.</p>
      */
-    private List<Map<String, Object>> parsePage(JsonNode root) {
-        if (!root.hasNonNull("results")) return List.of();
-        String html = root.path("results").asText();
-        if (!StringUtils.hasText(html)) return List.of();
+    @PostConstruct
+    private void initWarmup() {
 
-        // Build header index map first
-        Map<Integer, String> idxToHeader = root.path("columns").isArray()
-                ? buildHeaderMap(root.path("columns"))
-                : Map.of();
+        URI entry = buildUri(
+                getCfg().getBaseUrl(),          // https://product.tdk.com
+                "/en/search/list",              // entry-page that sets cookie
+                null);
+
+        Mono<Void> warmUpMono = getWebClient().get()
+                .uri(entry)
+                .accept(MediaType.TEXT_HTML)
+                .retrieve()
+                // Read only the first ~2 KB until constants appear
+                .bodyToFlux(DataBuffer.class)       // stream
+//                .doOnSubscribe(s -> log.info("TDK warm-up: GET {}", entry))
+                .map(buf -> buf.toString(UTF_8))
+                .scan(new StringBuilder(),
+                        (acc, chunk) -> acc.append(chunk.length() > CHUNK_LIMIT ? chunk.substring(0, CHUNK_LIMIT) : chunk))
+                .filter(sb -> sb.indexOf("site:") > 0
+                        && sb.indexOf("group:") > 0
+                        && sb.indexOf("design:") > 0)
+                .next()                             // stop at first matching buffer
+                .map(StringBuilder::toString)
+                .timeout(Duration.ofSeconds(WARMUP_TIMEOUT_S))
+                .doOnNext(this::extractConstants)
+//                .doOnSuccess(v -> log.info("TDK warm-up finished"))
+//                .doOnError(e -> log.warn("TDK warm-up failed: {}", e.toString()))
+                .onErrorResume(e -> Mono.empty())   // keep pipeline alive
+                .then()
+                .cache();
+
+        // Kick it off asynchronously AND wait for completion once
+        // No blocking of Spring context start-up
+        warmUpMono.subscribe();
+        // 1st thread triggers the warm-up; others race but all get same Mono
+        warmUpMono.block();
+
+    }
+
+    /**
+     * Pull site / group / design out of the entry-page <script> tag.
+     * Parses the entry page’s inline {@code <script>} to discover the current
+     * <em>site / group / design</em> values required by TDK’s POST endpoint.
+     *
+     * @param html raw HTML of <code>/en/search/list</code>
+     */
+    private void extractConstants(final String html) {
+
+        if (html == null || html.isBlank()) {
+            log.warn("TDK warm-up: empty HTML");
+            return;
+        }
 
         Document doc = Jsoup.parse(html);
-        List<Element> rows = doc.select("tr");
-        if (rows.size() <= 1) return List.of(); // no data rows
+        Element scriptEl = doc.selectFirst("script:contains(site)");
 
-        List<String> productsFoundCache = new ArrayList<>();
-        List<Map<String, Object>> parsed = new ArrayList<>();
-        for (int j=2; j<rows.size(); j++) {
-            Element tr = rows.get(j);
-            Elements tds = tr.select("td");
-            if (tds.isEmpty()) continue;
-
-            Map<String, Object> row = new LinkedHashMap<>();
-            for (int i = 2; i < tds.size()-2; i++) {
-                String header = idxToHeader.getOrDefault(i * 10, "col_" + i);
-                if ("Part No.".equalsIgnoreCase(header)) {
-                    Element partNo = tds.get(i).selectFirst("a[href]");
-                    if (partNo != null && productsFoundCache.contains(partNo.text())) {
-                        break;
-                    }else if(partNo!=null){
-                        productsFoundCache.add(partNo.text());
-                    }
-
-                }
-                // Special handling for Datasheet column
-                if ("Catalog / Data Sheet".equalsIgnoreCase(header)) {
-                    Element pdf = tds.get(i).selectFirst("a[href$=.pdf]");
-                    if (pdf != null) {
-                        row.put("Catalog / Data Sheet", pdf.absUrl("href"));
-                    }
-                    continue; // done with this cell
-                }
-                row.put(header, tds.get(i).text());
-            }
-            parsed.add(row);
+        if (scriptEl == null) {
+            log.warn("TDK warm-up: <script> with constants not found");
+            return;
         }
-        return parsed;
+
+        String body = scriptEl.html();
+
+        site.set(matchOrDefault(body, "site\\s*:\\s*\"([^\"]+)\"", DEFAULT_SITE));
+        group.set(matchOrDefault(body, "group\\s*:\\s*\"([^\"]+)\"", DEFAULT_GROUP));
+        design.set(matchOrDefault(body, "design\\s*:\\s*\"([^\"]+)\"", DEFAULT_DESIGN));
+
+        log.info("TDK constants discovered → site={} group={} design={}",
+                site.get(), group.get(), design.get());
     }
 
-    private static Map<Integer, String> buildHeaderMap(JsonNode columns) {
-        Map<Integer, String> map = new HashMap<>();
-        for (JsonNode n : columns) {
-            map.put(n.path("column_order").asInt(), n.path("column_name").asText());
-        }
-        return map;
+    /**
+     * Regex helper: extract first capture group or default.
+     * Returns the first capture group of {@code regex} if it matches
+     * {@code src}, otherwise {@code defaultVal}. Patterns are cached for
+     * performance.
+     *
+     * @param src        source text to match (can be {@code null})
+     * @param regex      the pattern with <em>one</em> capture group
+     * @param defaultVal value to return when no match is found
+     * @return extracted string or the provided default
+     */
+    private String matchOrDefault(final String src,
+                                  final String regex,
+                                  final String defaultVal) {
+        // compile once per pattern & cache in the map
+        Pattern p = PATTERN_CACHE.computeIfAbsent(regex, Pattern::compile);
+
+        Matcher m = p.matcher(src == null ? "" : src);
+        return m.find() ? m.group(1) : defaultVal;
     }
+
 }

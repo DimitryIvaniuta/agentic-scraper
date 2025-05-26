@@ -12,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
 
-
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -23,13 +22,18 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.resources.ConnectionProvider;
 import reactor.netty.transport.logging.AdvancedByteBufFormat;
+import reactor.util.function.Tuple2;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -82,16 +86,42 @@ public abstract class VendorSearchEngine {
      */
     private final JsonGridParser parser;
 
-    private final ObjectMapper mapper;
-
+    /**
+     * Maximum time to wait for a single TDK/Murata HTTP call to complete.
+     */
     private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(25);
 
-    protected VendorSearchEngine(VendorCfg cfg,
-                                 WebClient.Builder builder,
-                                 LLMHelper llmHelper,
-                                 JsonGridParser parser,
-                                 ObjectMapper mapper
-                                 ) {
+    /**
+     * TCP connect timeout for the underlying Reactor‐Netty client.
+     */
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(20);
+
+    /**
+     * Max time to wait for the first byte of the HTTP response.
+     */
+    private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(20);
+
+    /**
+     * Upper bound to sit in the connection-pool acquire queue.
+     */
+    private static final Duration POOL_ACQUIRE_DELAY = Duration.ofSeconds(2);
+
+    /**
+     * Max pooled connections shared across all vendor calls.
+     */
+    private static final int MAX_CONNECTIONS = 50;
+
+    /**
+     * Shared Jackson {@link ObjectMapper} – used by {@link #safeGet} / {@link #safePost}.
+     */
+    private final ObjectMapper mapper;
+
+    protected VendorSearchEngine(final VendorCfg cfg,
+                                 final WebClient.Builder builder,
+                                 final LLMHelper llmHelper,
+                                 final JsonGridParser parser,
+                                 final ObjectMapper mapper
+    ) {
         this.cfg = cfg;
         this.webClient = buildWebClient(builder);
         this.llmHelper = llmHelper;
@@ -99,15 +129,35 @@ public abstract class VendorSearchEngine {
         this.mapper = mapper;
     }
 
-    protected JsonNode safeGet(URI uri) {
+    /**
+     * Executes a <strong>synchronous</strong> HTTP&nbsp;<code>GET</code> request
+     * against the supplied {@link URI} via the shared, connection-pooled
+     * {@link WebClient}.
+     *
+     * <p>Operational characteristics:</p>
+     * <ul>
+     *   <li>{@code Accept: application/json} is sent automatically.</li>
+     *   <li>The call blocks the calling thread up to
+     *       {@link #HTTP_TIMEOUT the configured timeout} and then returns the
+     *       decoded {@link JsonNode}.</li>
+     *   <li>Any I/O, decoding, or timeout error is logged at <em>warn</em> level
+     *       and the method falls back to an <em>empty</em>
+     *       <code>{}</code>&nbsp;node produced by the shared
+     *       {@link #mapper}—never {@code null}.</li>
+     * </ul>
+     *
+     * @param uri the absolute {@link URI} to request (must not be {@code null})
+     * @return the response body mapped to a {@link JsonNode}; never {@code null},
+     *         guaranteed to be an <em>empty</em> object node on failure
+     */
+    protected JsonNode safeGet(final URI uri) {
         try {
             return webClient.get()
                     .uri(uri)
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()
-                    .bodyToMono(JsonNode.class)//byte[].class
+                    .bodyToMono(JsonNode.class)
                     .timeout(HTTP_TIMEOUT)
-//                    .map(this::toJson)
                     .block();
         } catch (Exception ex) {
             log.warn("safeGet failed for {}: {}", uri, ex.toString());
@@ -115,7 +165,40 @@ public abstract class VendorSearchEngine {
         }
     }
 
-    protected JsonNode safePost(URI uri, MultiValueMap<String,String> form) {
+    /**
+     * Executes a <strong>blocking</strong> HTTP&nbsp;<code>POST</code> request with
+     * an <code>application/x-www-form-urlencoded</code> body and maps the JSON
+     * response into a {@link JsonNode}.
+     *
+     * <h4>Pipeline overview</h4>
+     * <ol>
+     *   <li>Posts the supplied {@code form} to {@code uri}.</li>
+     *   <li>Retrieves the raw response as {@code byte[]} to avoid premature
+     *       decoding on the I/O thread.</li>
+     *   <li>Shifts JSON parsing to the bounded-elastic scheduler
+     *       (<em>CPU-bound work-pool</em>).</li>
+     *   <li>Wraps the result with Reactor’s {@link reactor.util.function.Tuple2
+     *       Tuple2}&nbsp;via {@link reactor.core.publisher.Mono#elapsed()
+     *       Mono.elapsed()} to capture the round-trip time, then immediately
+     *       unwraps it.</li>
+     *   <li>Applies a global {@link #HTTP_TIMEOUT}. If the timeout or any other
+     *       exception occurs, logs a warning and returns an empty object node
+     *       instead of propagating the error.</li>
+     *   <li>Terminal {@link Mono#block()} produces a concrete {@link JsonNode}
+     *       for imperative callers.</li>
+     * </ol>
+     *
+     * <p>Because the method always falls back to
+     * {@code mapper.createObjectNode()}, the caller never observes {@code null}
+     * and can safely iterate over the JSON structure.</p>
+     *
+     * @param uri   absolute endpoint URI (scheme + host + path); must not be {@code null}
+     * @param form  form-fields to be URL-encoded and sent in the POST body;
+     *              must not be {@code null} but may be empty
+     * @return      parsed JSON payload, or an <em>empty</em> object node when the
+     *              request fails or times out; never {@code null}
+     */
+    protected JsonNode safePost(final URI uri, final MultiValueMap<String, String> form) {
         try {
             return webClient.post()
                     .uri(uri)
@@ -123,45 +206,65 @@ public abstract class VendorSearchEngine {
                     .body(BodyInserters.fromFormData(form))
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()
-                    .bodyToMono(JsonNode.class)
+                    /* -------------- raw bytes stage ---------------- */
+                    .bodyToMono(byte[].class)
+//                .doOnSubscribe(s -> log.debug("TDK call started {}", form))
+//                .doOnNext(buf -> log.debug("TDK payload {} bytes", buf.length))
+                    /* -------------- JSON mapping stage ------------------ */
+                    .publishOn(Schedulers.boundedElastic())
+                    .map(this::toJson)
+                    /* -------------- timing stage ---------------- */
+                    .elapsed()                                           // Mono<Tuple2<Long,JsonNode>>
+//                .doOnNext(tp -> log.info("TDK round-trip {} ms", tp.getT1() / 1_000_000))
+                    .map(Tuple2::getT2)                               // back to Mono<JsonNode>
                     .timeout(HTTP_TIMEOUT)
+                    // graceful degradation
+                    .onErrorResume(e -> {
+                        log.warn("TDK {} failed: {}", uri.getPath(), e.toString());
+                        return Mono.just(mapper.createObjectNode());
+                    })
                     .block();
-        } catch (Exception ex) {
+        } catch (Exception ex) {            // protects .block() interruption etc.
             log.warn("safePost failed for {}: {}", uri, ex.toString());
             return mapper.createObjectNode();
         }
     }
 
-    private WebClient buildWebClient(WebClient.Builder builder) {
-        // 1) Timeouts
-        Duration connectTimeout   = Duration.ofSeconds(20);
-        Duration responseTimeout  = Duration.ofSeconds(20);
-        Duration poolAcquireDelay = Duration.ofSeconds(2);
+    private JsonNode toJson(final byte[] bytes) {
+        try {
+            return mapper.readTree(bytes);
+        } catch (IOException ex) {
+            log.warn("JSON parse error: {}", ex.getMessage());
+            return mapper.createObjectNode();
+        }
+    }
 
-        // 2) Connection pooling
+    private WebClient buildWebClient(final WebClient.Builder builder) {
+        // Connection pooling
         ConnectionProvider pool = ConnectionProvider.builder("vendor-pool")
-                .maxConnections(50)
-                .pendingAcquireTimeout(poolAcquireDelay)
+                .maxConnections(MAX_CONNECTIONS)
+                .pendingAcquireTimeout(POOL_ACQUIRE_DELAY)
                 .build();
 
-        // 3) Build the Reactor-Netty HttpClient
+        // Build the Reactor-Netty HttpClient
         HttpClient httpClient = HttpClient.create(pool)
                 .compress(true)
                 .protocol(HttpProtocol.H2, HttpProtocol.HTTP11) // HTTP/2 with HTTP/1.1 fallback
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) connectTimeout.toMillis())
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
 
-                .responseTimeout(responseTimeout)
+                .responseTimeout(RESPONSE_TIMEOUT)
                 .wiretap("reactor.netty.http.client.HttpClient",
                         LogLevel.DEBUG,
-                        AdvancedByteBufFormat.TEXTUAL);
+                        AdvancedByteBufFormat.TEXTUAL)
+                .compress(true);
 
-        // 4) Eagerly initialize the pipeline (DNS, SSL, codecs, HTTP/2 ALPN, etc.)
+        // Eagerly initialize the pipeline (DNS, SSL, codecs, HTTP/2 ALPN, etc.)
         httpClient.warmup().block();
 
-        // 5) Build WebClient
+        // Build WebClient
         return builder
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .defaultHeader(HttpHeaders.ACCEPT,          MediaType.APPLICATION_JSON_VALUE)
+                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
                 .build();
     }
 
@@ -271,6 +374,9 @@ public abstract class VendorSearchEngine {
      * @return default category value.
      */
     private String defaultCateOrFail() {
+        List<String> list = List.of("x", "y", "z");
+        String[] arr = list.toArray(value -> new String[value]);
+
         String def = getCfg().getDefaultCate();
         if (def != null) {
             return def;
