@@ -104,7 +104,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
             String partNoValue = null;
 
             // Skip decorative TDs 0,1 and last 2
-            for (int col = 2; col < tds.size() - 2; col++) {
+            for (int col = 2; col < tds.size(); col++) {
                 String header = orderToHeader.getOrDefault(col * ORDER_MULTIPLIER, "col_" + col);
                 Element td = tds.get(col);
 
@@ -121,7 +121,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
             boolean firstRowIsPlaceholder = idx == 0 && (partNoValue == null || partNoValue.isBlank())
                     && row.values().stream().allMatch(v -> Objects.toString(v, "").isBlank());
 
-            boolean isUnique = partNoValue != null && seenPartNos.add(partNoValue);
+            boolean isUnique = partNoValue != null;// && seenPartNos.add(partNoValue);
             if (!firstRowIsPlaceholder && isUnique && !row.isEmpty()) {
                 parsedRows.add(Collections.unmodifiableMap(row));
             }

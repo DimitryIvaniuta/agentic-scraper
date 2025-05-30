@@ -20,6 +20,8 @@ import org.springframework.lang.Nullable;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
@@ -33,10 +35,12 @@ import reactor.util.function.Tuple2;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * <h2>VendorSearchEngine</h2>
@@ -57,6 +61,11 @@ import java.util.NoSuchElementException;
 @Getter
 //@RequiredArgsConstructor
 public abstract class VendorSearchEngine {
+
+    /**
+     * Anti‑bot cookies harvested during warm‑up and replayed on each call.
+     */
+    private final Map<String,String> antiBotCookies = new ConcurrentHashMap<>();
 
     /**
      * Number of characters to use when extracting a part number prefix.
@@ -155,6 +164,7 @@ public abstract class VendorSearchEngine {
             return webClient.get()
                     .uri(uri)
                     .accept(MediaType.APPLICATION_JSON)
+                    .cookies(c -> antiBotCookies.forEach(c::add))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
                     .timeout(HTTP_TIMEOUT)
@@ -262,10 +272,68 @@ public abstract class VendorSearchEngine {
         httpClient.warmup().block();
 
         // Build WebClient
+//        b.defaultHeader(HttpHeaders.ACCEPT_ENCODING, "br,gzip,deflate,zstd");
         return builder
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                .filters(f -> f.add(saveCookies()))               // ⬅️ capture cookies
+                .defaultHeaders(h -> {
+                    h.set(HttpHeaders.ACCEPT, "application/json, text/plain, */*");
+                    h.set(HttpHeaders.ACCEPT_ENCODING, "br, gzip, deflate");
+                    h.set(HttpHeaders.ACCEPT_LANGUAGE, "en-US,en;q=0.5");
+                    h.set("X-Requested-With", "XMLHttpRequest");
+                    h.set(HttpHeaders.USER_AGENT,
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    + "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    + "Chrome/125.0.0.0 Safari/537.36");
+                    h.set("Sec-CH-UA", "\"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"");
+                    h.set("Sec-CH-UA-Mobile", "?0");
+                    h.set("Sec-CH-UA-Platform", "\"Windows\"");
+                    h.set(HttpHeaders.REFERER, getCfg().getBaseUrl() + "/en/search/list");
+                })
+                /* one “Cookie:” header that replays whatever is in the jar               */
+                .defaultCookie("dummy", "dummy")                  // placeholder key
+                .filter((req, next) -> {
+                    ClientRequest mutated = ClientRequest.from(req)
+                            .cookies(c -> { c.clear(); antiBotCookies.forEach(c::add); })
+                            .build();
+                    return next.exchange(mutated);
+                })
                 .build();
+    }
+
+    /** Interceptor: store every Set-Cookie coming back from the server. */
+    private ExchangeFilterFunction saveCookies() {
+        return ExchangeFilterFunction.ofResponseProcessor(resp -> {
+            resp.cookies().values().stream()
+                    .flatMap(Collection::stream)
+                    .forEach(c -> antiBotCookies.put(c.getName(), c.getValue()));
+            return Mono.just(resp);
+        });
+    }
+
+    /**
+     * Anti-bot cookie propagation.
+     * Store a single <code>bm_*</code> Akamai anti-bot cookie so that every
+     * subsequent call made through {@link #webClient} automatically replays it.
+     * <p>
+     * The method is invoked from a vendor’s warm-up phase (e.g. TDK) each time
+     * the entry page sets or refreshes a cookie.  Values are kept in a
+     * thread-safe {@link ConcurrentHashMap}; the most recent value wins.
+     * <br>
+     * Subclasses should never call the map directly—always use this method so
+     * future logic (e.g. expiry handling) is centralised.
+     *
+     * @param name  cookie name (usually starts with <code>bm_</code>);
+     *              must not be {@code null}
+     * @param value cookie value; may be empty but never {@code null}
+     */
+    protected void putAntiBotCookie(@NonNull final String name,
+                                    @NonNull final String value) {
+
+        String previous = antiBotCookies.put(name, value);
+        if (!value.equals(previous)) {
+            log.debug("Anti-bot cookie updated: {}={}", name, value);
+        }
     }
 
     /**
@@ -293,7 +361,6 @@ public abstract class VendorSearchEngine {
         if (q != null && !q.isEmpty()) {
             b.queryParams(q);
         }
-
         return b.build(false).toUri();   // keep already‑encoded ‘|’ etc.
     }
 

@@ -23,6 +23,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -53,8 +54,10 @@ import static io.netty.util.CharsetUtil.UTF_8;
  */
 @Slf4j
 @Service("tdkMpnSvc")
-@ConditionalOnProperty(prefix = "scraper.configs.tdk", name = "enabled", havingValue = "true", matchIfMissing = true)
-public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearchService {
+@ConditionalOnProperty(prefix = "scraper.configs.tdk", name = "enabled",
+        havingValue = "true", matchIfMissing = true)
+public class TdkMpnSearchService extends VendorSearchEngine
+        implements MpnSearchService {
 
     /**
      * Cache of compiled {@link Pattern}s – avoids recompilation overhead.
@@ -150,11 +153,14 @@ public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearch
         URI endpoint = buildUri(getCfg().getBaseUrl(), getCfg().getMpnSearchPath(), null);
 
         baseForm.set("pn", cleaned);
-
+        long t0 = System.nanoTime();
         JsonNode rsp = safePost(endpoint, baseForm);
-
+        long t1 = System.nanoTime();
         List<Map<String, Object>> rows = getParser().parse(rsp);
+        long t2 = System.nanoTime();
 
+        log.info("TDK  NET={} ms  PARSE={} ms  TOTAL={} ms",
+                (t1-t0)/1_000_000, (t2-t1)/1_000_000, (t2-t0)/1_000_000);
         return rows;
     }
 
@@ -179,7 +185,7 @@ public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearch
                 getCfg().getBaseUrl(),          // https://product.tdk.com
                 "/en/search/list",              // entry-page that sets cookie
                 null);
-
+/*
         Mono<Void> warmUpMono = getWebClient().get()
                 .uri(entry)
                 .accept(MediaType.TEXT_HTML)
@@ -200,6 +206,38 @@ public class TdkMpnSearchService extends VendorSearchEngine implements MpnSearch
 //                .doOnSuccess(v -> log.info("TDK warm-up finished"))
 //                .doOnError(e -> log.warn("TDK warm-up failed: {}", e.toString()))
                 .onErrorResume(e -> Mono.empty())   // keep pipeline alive
+                .then()
+                .cache();*/
+        Mono<Void> warmUpMono = getWebClient().get()
+                .uri(entry)
+                .accept(MediaType.TEXT_HTML)
+                .exchangeToMono(resp -> {
+                    // --- capture Akamai bm_* cookies ---
+                    resp.cookies().values().stream()
+                            .flatMap(List::stream)
+                            .filter(c -> c.getName().startsWith("bm_"))
+                            .forEach(c -> putAntiBotCookie(c.getName(), c.getValue()));
+
+                    // --- stream small chunk until constants appear ---
+                    return resp.bodyToFlux(DataBuffer.class)
+                            .map(buf -> buf.toString(StandardCharsets.UTF_8))
+                            .scan(new StringBuilder(), (acc, chunk) -> acc.append(
+                                    chunk, 0, Math.min(chunk.length(), CHUNK_LIMIT)))
+                            .filter(sb -> sb.indexOf("site:")   > 0
+                                    && sb.indexOf("group:")  > 0
+                                    && sb.indexOf("design:") > 0)
+                            .next()
+                            .map(StringBuilder::toString);
+                })
+                .timeout(Duration.ofSeconds(WARMUP_TIMEOUT_S))
+                .doOnNext(this::extractConstants)
+                .doOnSuccess(v -> log.info("TDK warm-up finished"))
+                .doOnError(e -> log.warn("TDK warm-up failed: {}", e.toString()))
+                .onErrorResume(e -> Mono.empty())
+                .onErrorResume(e -> {
+                    log.warn("TDK warm‑up failed: {}", e.toString());
+                    return Mono.empty();
+                })
                 .then()
                 .cache();
 
