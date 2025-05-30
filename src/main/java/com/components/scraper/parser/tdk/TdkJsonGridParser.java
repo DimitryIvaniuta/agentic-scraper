@@ -10,7 +10,15 @@ import org.jsoup.select.Elements;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * <h2>TDK JSON&nbsp;Grid Parser</h2>
@@ -89,7 +97,6 @@ public final class TdkJsonGridParser implements JsonGridParser {
             return List.of();
         }
 
-//        List<Element> dataRows = allRows.subList(2, allRows.size() - 2);
         Set<String> seenPartNos = new HashSet<>();
         List<Map<String, Object>> parsedRows = new ArrayList<>(allRows.size());
 
@@ -121,7 +128,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
             boolean firstRowIsPlaceholder = idx == 0 && (partNoValue == null || partNoValue.isBlank())
                     && row.values().stream().allMatch(v -> Objects.toString(v, "").isBlank());
 
-            boolean isUnique = partNoValue != null;// && seenPartNos.add(partNoValue);
+            boolean isUnique = partNoValue != null;
             if (!firstRowIsPlaceholder && isUnique && !row.isEmpty()) {
                 parsedRows.add(Collections.unmodifiableMap(row));
             }
@@ -129,7 +136,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
         return Collections.unmodifiableList(parsedRows);
     }
 
-    private static Map<Integer, String> buildHeaderMap(JsonNode columns) {
+    private static Map<Integer, String> buildHeaderMap(final JsonNode columns) {
         if (columns == null || !columns.isArray()) {
             return Map.of();
         }
@@ -140,7 +147,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
         return map;
     }
 
-    private static String extractPartNo(Element td, Map<String, Object> row) {
+    private static String extractPartNo(final Element td, final Map<String, Object> row) {
         Element anchor = td.selectFirst("a[href]");
         String text = (anchor != null) ? anchor.text() : td.text();
         row.put(COL_PART_NO, text);
@@ -150,7 +157,7 @@ public final class TdkJsonGridParser implements JsonGridParser {
         return text;
     }
 
-    private static void extractDatasheet(Element td, Map<String, Object> row) {
+    private static void extractDatasheet(final Element td, final Map<String, Object> row) {
         Element pdf = td.selectFirst("a[href$=.pdf]");
         if (pdf != null) {
             row.put(COL_DATASHEET, pdf.absUrl("href"));

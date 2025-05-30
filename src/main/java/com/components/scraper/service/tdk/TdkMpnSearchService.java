@@ -32,8 +32,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static io.netty.util.CharsetUtil.UTF_8;
-
 /**
  * <h2>TDK – Manufacturer Part-Number (MPN) Search Service</h2>
  *
@@ -79,6 +77,12 @@ public class TdkMpnSearchService extends VendorSearchEngine
      * Fallback <code>design</code> constant used before warm-up completes.
      */
     private static final String DEFAULT_DESIGN = "producttdkcom-en";
+
+    /**
+     * Time Milliseconds Value.
+     */
+    private static final Long MILLISECONDS_VALUE = 1_000_000L;
+
 
     /**
      * Discovered value of <em>site</em> parsed from the warm-up page.
@@ -160,7 +164,7 @@ public class TdkMpnSearchService extends VendorSearchEngine
         long t2 = System.nanoTime();
 
         log.info("TDK  NET={} ms  PARSE={} ms  TOTAL={} ms",
-                (t1-t0)/1_000_000, (t2-t1)/1_000_000, (t2-t0)/1_000_000);
+                (t1 - t0) / MILLISECONDS_VALUE, (t2 - t1) / MILLISECONDS_VALUE, (t2 - t0) / MILLISECONDS_VALUE);
         return rows;
     }
 
@@ -185,29 +189,7 @@ public class TdkMpnSearchService extends VendorSearchEngine
                 getCfg().getBaseUrl(),          // https://product.tdk.com
                 "/en/search/list",              // entry-page that sets cookie
                 null);
-/*
-        Mono<Void> warmUpMono = getWebClient().get()
-                .uri(entry)
-                .accept(MediaType.TEXT_HTML)
-                .retrieve()
-                // Read only the first ~2 KB until constants appear
-                .bodyToFlux(DataBuffer.class)       // stream
-//                .doOnSubscribe(s -> log.info("TDK warm-up: GET {}", entry))
-                .map(buf -> buf.toString(UTF_8))
-                .scan(new StringBuilder(),
-                        (acc, chunk) -> acc.append(chunk.length() > CHUNK_LIMIT ? chunk.substring(0, CHUNK_LIMIT) : chunk))
-                .filter(sb -> sb.indexOf("site:") > 0
-                        && sb.indexOf("group:") > 0
-                        && sb.indexOf("design:") > 0)
-                .next()                             // stop at first matching buffer
-                .map(StringBuilder::toString)
-                .timeout(Duration.ofSeconds(WARMUP_TIMEOUT_S))
-                .doOnNext(this::extractConstants)
-//                .doOnSuccess(v -> log.info("TDK warm-up finished"))
-//                .doOnError(e -> log.warn("TDK warm-up failed: {}", e.toString()))
-                .onErrorResume(e -> Mono.empty())   // keep pipeline alive
-                .then()
-                .cache();*/
+
         Mono<Void> warmUpMono = getWebClient().get()
                 .uri(entry)
                 .accept(MediaType.TEXT_HTML)
@@ -223,8 +205,8 @@ public class TdkMpnSearchService extends VendorSearchEngine
                             .map(buf -> buf.toString(StandardCharsets.UTF_8))
                             .scan(new StringBuilder(), (acc, chunk) -> acc.append(
                                     chunk, 0, Math.min(chunk.length(), CHUNK_LIMIT)))
-                            .filter(sb -> sb.indexOf("site:")   > 0
-                                    && sb.indexOf("group:")  > 0
+                            .filter(sb -> sb.indexOf("site:") > 0
+                                    && sb.indexOf("group:") > 0
                                     && sb.indexOf("design:") > 0)
                             .next()
                             .map(StringBuilder::toString);

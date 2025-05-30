@@ -65,7 +65,7 @@ public abstract class VendorSearchEngine {
     /**
      * Anti‑bot cookies harvested during warm‑up and replayed on each call.
      */
-    private final Map<String,String> antiBotCookies = new ConcurrentHashMap<>();
+    private final Map<String, String> antiBotCookies = new ConcurrentHashMap<>();
 
     /**
      * Number of characters to use when extracting a part number prefix.
@@ -157,7 +157,7 @@ public abstract class VendorSearchEngine {
      *
      * @param uri the absolute {@link URI} to request (must not be {@code null})
      * @return the response body mapped to a {@link JsonNode}; never {@code null},
-     *         guaranteed to be an <em>empty</em> object node on failure
+     * guaranteed to be an <em>empty</em> object node on failure
      */
     protected JsonNode safeGet(final URI uri) {
         try {
@@ -202,11 +202,11 @@ public abstract class VendorSearchEngine {
      * {@code mapper.createObjectNode()}, the caller never observes {@code null}
      * and can safely iterate over the JSON structure.</p>
      *
-     * @param uri   absolute endpoint URI (scheme + host + path); must not be {@code null}
-     * @param form  form-fields to be URL-encoded and sent in the POST body;
-     *              must not be {@code null} but may be empty
-     * @return      parsed JSON payload, or an <em>empty</em> object node when the
-     *              request fails or times out; never {@code null}
+     * @param uri  absolute endpoint URI (scheme + host + path); must not be {@code null}
+     * @param form form-fields to be URL-encoded and sent in the POST body;
+     *             must not be {@code null} but may be empty
+     * @return parsed JSON payload, or an <em>empty</em> object node when the
+     * request fails or times out; never {@code null}
      */
     protected JsonNode safePost(final URI uri, final MultiValueMap<String, String> form) {
         try {
@@ -272,7 +272,6 @@ public abstract class VendorSearchEngine {
         httpClient.warmup().block();
 
         // Build WebClient
-//        b.defaultHeader(HttpHeaders.ACCEPT_ENCODING, "br,gzip,deflate,zstd");
         return builder
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .filters(f -> f.add(saveCookies()))               // ⬅️ capture cookies
@@ -294,14 +293,31 @@ public abstract class VendorSearchEngine {
                 .defaultCookie("dummy", "dummy")                  // placeholder key
                 .filter((req, next) -> {
                     ClientRequest mutated = ClientRequest.from(req)
-                            .cookies(c -> { c.clear(); antiBotCookies.forEach(c::add); })
+                            .cookies(c -> {
+                                c.clear();
+                                antiBotCookies.forEach(c::add);
+                            })
                             .build();
                     return next.exchange(mutated);
                 })
                 .build();
     }
 
-    /** Interceptor: store every Set-Cookie coming back from the server. */
+    /**
+     * Creates an {@link ExchangeFilterFunction} that intercepts every HTTP response
+     * and stores all cookies set by the server into the {@code antiBotCookies} map.
+     *
+     * <p>This filter is intended to capture Akamai anti-bot cookies (e.g.
+     * <code>bm_sz</code>, <code>bm_sv</code>, <code>abck</code>, etc.) as soon
+     * as they are issued on any response.  Subsequent requests will replay these
+     * cookies to avoid bot-throttling delays.</p>
+     *
+     * @return an {@link ExchangeFilterFunction} which, for each client response,
+     *         iterates over all {@link org.springframework.http.ResponseCookie ResponseCookie}
+     *         instances, stores each cookie name and value into the
+     *         {@code antiBotCookies} map, and then returns the original response
+     *         unchanged
+     */
     private ExchangeFilterFunction saveCookies() {
         return ExchangeFilterFunction.ofResponseProcessor(resp -> {
             resp.cookies().values().stream()
