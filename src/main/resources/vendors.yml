@@ -40,3 +40,12 @@ vendors:
       timeout: 10s
       rate-limit:
         permits-per-second: 3
+    kemet:
+      base-url: https://www.kemet.com
+      mpn-search-path: /en/us/search.products.json
+      cross-ref-url: https://www.kemet.com/crossreference
+      enabled: true
+      page-size: 20
+      timeout: 10s
+      rate-limit:
+        permits-per-second: 3

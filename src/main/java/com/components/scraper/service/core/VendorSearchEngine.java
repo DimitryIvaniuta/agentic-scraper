@@ -5,6 +5,7 @@ import com.components.scraper.config.VendorCfg;
 import com.components.scraper.parser.JsonGridParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.logging.LogLevel;
 import lombok.Getter;
@@ -216,21 +217,15 @@ public abstract class VendorSearchEngine {
                     .body(BodyInserters.fromFormData(form))
                     .accept(MediaType.APPLICATION_JSON)
                     .retrieve()
-                    /* -------------- raw bytes stage ---------------- */
                     .bodyToMono(byte[].class)
-//                .doOnSubscribe(s -> log.debug("TDK call started {}", form))
-//                .doOnNext(buf -> log.debug("TDK payload {} bytes", buf.length))
-                    /* -------------- JSON mapping stage ------------------ */
                     .publishOn(Schedulers.boundedElastic())
                     .map(this::toJson)
-                    /* -------------- timing stage ---------------- */
                     .elapsed()                                           // Mono<Tuple2<Long,JsonNode>>
-//                .doOnNext(tp -> log.info("TDK round-trip {} ms", tp.getT1() / 1_000_000))
                     .map(Tuple2::getT2)                               // back to Mono<JsonNode>
                     .timeout(HTTP_TIMEOUT)
                     // graceful degradation
                     .onErrorResume(e -> {
-                        log.warn("TDK {} failed: {}", uri.getPath(), e.toString());
+                        log.warn("POST Resource {} failed: {}", uri.getPath(), e.toString());
                         return Mono.just(mapper.createObjectNode());
                     })
                     .block();
@@ -238,6 +233,38 @@ public abstract class VendorSearchEngine {
             log.warn("safePost failed for {}: {}", uri, ex.toString());
             return mapper.createObjectNode();
         }
+    }
+
+    /**
+     * Thin wrapper around {@link WebClient} that sends <strong>one</strong>
+     * POST request with <code>Content‑Type: application/json</code> and returns
+     * the parsed JSON document.
+     */
+    protected JsonNode postJson(final URI uri, final ObjectNode body) {
+        return webClient.post()
+                .uri(uri)                    // https://www.kemet.com/en/us/search.products.json
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                // a couple of real-browser headers keeps Akamai/CDN quiet
+                .header("Origin",  "https://www.kemet.com")
+                .header("Referer", "https://www.kemet.com/en/us")
+                .header("User-Agent",
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block(HTTP_TIMEOUT);
+    }
+
+    private JsonNode postJson2(final URI uri, final ObjectNode body, final long timeoutSeconds) {
+        return getWebClient().post()
+                .uri(uri)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .block(Duration.ofSeconds(timeoutSeconds));
     }
 
     private JsonNode toJson(final byte[] bytes) {
