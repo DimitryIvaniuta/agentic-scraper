@@ -12,12 +12,28 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * <h2>KEMET JSON Parser</h2>
+ *
+ * <p>This version flattens <strong>all</strong> {@code parameterValues[*]}
+ * into an easy‑to‑consume structure where each {@code parameterName} is used
+ * as the JSON property key and its <em>array</em> of
+ * {@code formattedValue}s becomes the property value.</p>
+ *
+ * <p>Example output for a single part:</p>
+ * <pre>{
+ *   "MPN": "GPC16.5104K630C31TV44",
+ *   "Capacitance": ["0.1 uF"],
+ *   "Tolerance":   ["10%"],
+ *   "Voltage DC":  ["630 VDC"],
+ *   …
+ * }</pre>
+ */
 @Component("kemetGridParser")
 @Slf4j
 public final class KemetJsonGridParser implements JsonGridParser {
 
     private static final String KEY_PARTS = "detectedUniqueParts";
-
 
     /**
      * {@inheritDoc}
@@ -32,40 +48,27 @@ public final class KemetJsonGridParser implements JsonGridParser {
         for (JsonNode rawPart : root.get(KEY_PARTS)) {
             Map<String, Object> row = new LinkedHashMap<>();
 
-            // Mandatory fields – always present for a valid part
+            // Canonical part number & a few administrative flags
             row.put("MPN", textOrNull(rawPart, "displayPn"));
-            row.put("mfgId", rawPart.path("mfgId").asInt(-1));
             row.put("obsolete", rawPart.path("obsolete").asBoolean(false));
             row.put("rohsExceptions", rawPart.path("hasRoHSExceptions").asBoolean(false));
 
-            // Datasheet hyperlink if provided
-            String specsheet = textOrNull(rawPart, "specsheetLink");
-            if (StringUtils.hasText(specsheet)) {
-                row.put("datasheet", specsheet);
-            }
+            // Flatten every parameterName → [formattedValue, …]
+            if (rawPart.has("parameterValues") && rawPart.get("parameterValues").isArray()) {
+                rawPart.get("parameterValues").forEach(p -> {
+                    String name = textOrNull(p, "parameterName");
+                    if (!StringUtils.hasText(name)) return;
 
-            // Aliases – list of alternative part numbers (optional)
-            if (rawPart.has("aliases") && rawPart.get("aliases").isArray()) {
-                List<String> aliases = new ArrayList<>();
-                rawPart.get("aliases").forEach(a -> aliases.add(textOrNull(a, "displayPn")));
-                if (!aliases.isEmpty()) {
-                    row.put("aliases", aliases);
-                }
-            }
-
-            // Parameter bucket (Capacitance, Voltage, Tolerance, …)
-            if (rawPart.has("parameters") && rawPart.get("parameters").isArray()) {
-                rawPart.get("parameters").forEach(p -> {
-                    String name = textOrNull(p, "name");
-                    if (!StringUtils.hasText(name)) {
-                        return; // continue lambda
+                    List<String> values = new ArrayList<>();
+                    JsonNode vals = p.path("parameterValues");
+                    if (vals.isArray()) {
+                        vals.forEach(v -> {
+                            String fv = textOrNull(v, "formattedValue");
+                            if (StringUtils.hasText(fv)) values.add(fv);
+                        });
                     }
-                    JsonNode values = p.path("parameterValues");
-                    if (values.isArray() && values.size() > 0) {
-                        String val = textOrNull(values.get(0), "name");
-                        if (StringUtils.hasText(val)) {
-                            row.put(name, val);
-                        }
+                    if (!values.isEmpty()) {
+                        row.put(name, Collections.unmodifiableList(values));
                     }
                 });
             }
@@ -75,7 +78,6 @@ public final class KemetJsonGridParser implements JsonGridParser {
         return Collections.unmodifiableList(rows);
     }
 
-    /** Null‑safe helper. */
     private static String textOrNull(final JsonNode node, final String field) {
         JsonNode n = (node == null) ? null : node.get(field);
         return (n == null || n.isNull()) ? null : n.asText();
