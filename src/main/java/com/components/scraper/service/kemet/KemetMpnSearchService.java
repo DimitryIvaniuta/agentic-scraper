@@ -12,8 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.net.URI;
@@ -53,6 +51,9 @@ public class KemetMpnSearchService extends VendorSearchEngine
         super(factory.forVendor("kemet"), builder, llmHelper, parser, om);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public String vendor() {
         return "KEMET";
@@ -68,9 +69,6 @@ public class KemetMpnSearchService extends VendorSearchEngine
             return List.of();
         }
 
-//        MultiValueMap<String, String> baseForm = new LinkedMultiValueMap<>();
-//        baseForm.add("definitionId", String.valueOf(DEFINITION_ID));
-//        baseForm.add("input", cleaned);
         ObjectNode body = getMapper().createObjectNode()
                 .put("definitionId", 482)
                 .put("input", cleaned);            // full, trimmed MPN
@@ -84,7 +82,6 @@ public class KemetMpnSearchService extends VendorSearchEngine
 
         // Execute request – measure timings similar to the TDK implementation
         long t0 = System.nanoTime();
-//        final JsonNode rsp = safePost(endpoint, baseForm);
         final JsonNode rsp = postJson(endpoint, body);
         long t1 = System.nanoTime();
 
@@ -92,7 +89,7 @@ public class KemetMpnSearchService extends VendorSearchEngine
         long t2 = System.nanoTime();
 
         log.info("KEMET NET={}ms  PARSE={}ms  TOTAL={}ms",
-                (t1 - t0) / 1_000_000, (t2 - t1) / 1_000_000, (t2 - t0) / 1_000_000);
+                (t1 - t0) / MILLISECONDS_VALUE, (t2 - t1) / MILLISECONDS_VALUE, (t2 - t0) / MILLISECONDS_VALUE);
         return rows;
     }
 

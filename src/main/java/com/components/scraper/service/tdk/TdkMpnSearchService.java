@@ -79,12 +79,6 @@ public class TdkMpnSearchService extends VendorSearchEngine
     private static final String DEFAULT_DESIGN = "producttdkcom-en";
 
     /**
-     * Time Milliseconds Value.
-     */
-    private static final Long MILLISECONDS_VALUE = 1_000_000L;
-
-
-    /**
      * Discovered value of <em>site</em> parsed from the warm-up page.
      */
     private final AtomicReference<String> site = new AtomicReference<>(DEFAULT_SITE);

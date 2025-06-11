@@ -33,6 +33,9 @@ import java.util.Map;
 @Slf4j
 public final class KemetJsonGridParser implements JsonGridParser {
 
+    /**
+     * Unique Parts JSON key name.
+     */
     private static final String KEY_PARTS = "detectedUniqueParts";
 
     /**
@@ -57,14 +60,18 @@ public final class KemetJsonGridParser implements JsonGridParser {
             if (rawPart.has("parameterValues") && rawPart.get("parameterValues").isArray()) {
                 rawPart.get("parameterValues").forEach(p -> {
                     String name = textOrNull(p, "parameterName");
-                    if (!StringUtils.hasText(name)) return;
+                    if (!StringUtils.hasText(name)) {
+                        return;
+                    }
 
                     List<String> values = new ArrayList<>();
                     JsonNode vals = p.path("parameterValues");
                     if (vals.isArray()) {
                         vals.forEach(v -> {
                             String fv = textOrNull(v, "formattedValue");
-                            if (StringUtils.hasText(fv)) values.add(fv);
+                            if (StringUtils.hasText(fv)) {
+                                values.add(fv);
+                            }
                         });
                     }
                     if (!values.isEmpty()) {

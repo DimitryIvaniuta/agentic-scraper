@@ -60,8 +60,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 @Getter
-//@RequiredArgsConstructor
 public abstract class VendorSearchEngine {
+
+    /**
+     * Time Milliseconds Value.
+     */
+    public static final Long MILLISECONDS_VALUE = 1_000_000L;
 
     /**
      * Anti‑bot cookies harvested during warm‑up and replayed on each call.
@@ -239,6 +243,10 @@ public abstract class VendorSearchEngine {
      * Thin wrapper around {@link WebClient} that sends <strong>one</strong>
      * POST request with <code>Content‑Type: application/json</code> and returns
      * the parsed JSON document.
+     *
+     * @param uri  absolute endpoint URI (scheme + host + path); must not be {@code null}
+     * @param body ObjectNode
+     * @return parsed JSON payload
      */
     protected JsonNode postJson(final URI uri, final ObjectNode body) {
         return webClient.post()
@@ -246,7 +254,7 @@ public abstract class VendorSearchEngine {
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
                 // a couple of real-browser headers keeps Akamai/CDN quiet
-                .header("Origin",  "https://www.kemet.com")
+                .header("Origin", "https://www.kemet.com")
                 .header("Referer", "https://www.kemet.com/en/us")
                 .header("User-Agent",
                         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -254,17 +262,6 @@ public abstract class VendorSearchEngine {
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .block(HTTP_TIMEOUT);
-    }
-
-    private JsonNode postJson2(final URI uri, final ObjectNode body, final long timeoutSeconds) {
-        return getWebClient().post()
-                .uri(uri)
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.APPLICATION_JSON)
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .block(Duration.ofSeconds(timeoutSeconds));
     }
 
     private JsonNode toJson(final byte[] bytes) {
@@ -485,7 +482,6 @@ public abstract class VendorSearchEngine {
      */
     private String defaultCateOrFail() {
         List<String> list = List.of("x", "y", "z");
-        String[] arr = list.toArray(value -> new String[value]);
 
         String def = getCfg().getDefaultCate();
         if (def != null) {
