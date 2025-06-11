@@ -35,6 +35,7 @@ vendors:
       base-url: https://product.tdk.com
       mpn-search-path: /pdc_api/en/search/list/search_result
       cross-ref-url: https://product.tdk.com/crossreference
+      parametric-search-url: /pdc_api/en/search/list/search_result
       enabled: true
       page-size: 20
       timeout: 10s

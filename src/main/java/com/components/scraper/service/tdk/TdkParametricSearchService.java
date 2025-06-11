@@ -1,7 +1,7 @@
 package com.components.scraper.service.tdk;
 
 import com.components.scraper.ai.LLMHelper;
-import com.components.scraper.config.VendorCfg;
+import com.components.scraper.config.ParametricFilterConfig;
 import com.components.scraper.config.VendorConfigFactory;
 import com.components.scraper.parser.JsonGridParser;
 import com.components.scraper.service.core.ParametricSearchService;
@@ -9,164 +9,160 @@ import com.components.scraper.service.core.VendorSearchEngine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.lang.NonNull;
-import org.springframework.lang.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
-import java.net.URLEncoder;
+
+import jakarta.annotation.PostConstruct;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.Collection;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.stream.Collectors;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * <h2>TDK HTTP Parametric Search Service</h2>
- *
- * <p>Pure‑HTTP implementation of TDK’s parametric/grid search endpoint
- * (<kbd>{base‑url}{parametric‑path}</kbd>; e.g.
- * <code>https://product.tdk.com/en/search/productsearch</code>).</p>
- *
- * <p>The service converts a high‑level filter map into TDK’s proprietary
- * <code>fn</code> query parameter (documented by TDK as
- * “<i>filter‑name</i>”) and maps the returned JSON grid into a
- * <code>List&lt;Map&lt;String,Object&gt;&gt;</code>.</p>
- *
- * <p>Design principles are identical to the Murata counterpart:</p>
+ * <h2>TDK – Parametric Search Service</h2>
+ * <p>Implements parametric search against TDK's PDC API:
+ * <code>/pdc_api/en/search/list/search_result</code> with free-text support via LLM.</p>
+ * <p>Supports:</p>
  * <ul>
- *   <li>No vendor‑specific parser code lives here – grid unpacking is
- *       delegated to {@link JsonGridParser}.</li>
- *   <li>All URL bits come from {@link VendorCfg} so that nothing is
- *       hard‑coded in Java.</li>
- *   <li>Error handling/fallback are done once in {@link VendorSearchEngine}.
- *   </li>
+ *   <li>Exact parameter filters as scon query params</li>
+ *   <li>Free-text "details" routing through {@link LLMHelper}</li>
+ *   <li>Reuse of connection pool, anti-bot cookies, Brotli, and warm-up</li>
  * </ul>
  */
 @Slf4j
-@SuppressWarnings("DuplicatedCode")   // intentional symmetry with Murata class
-public class TdkParametricSearchService
-        extends VendorSearchEngine
-        implements ParametricSearchService {
+@Service("tdkParamSvc")
+@ConditionalOnProperty(prefix = "scraper.configs.tdk", name = "enabled", havingValue = "true", matchIfMissing = true)
+public class TdkParametricSearchService extends TdkSearchEngine implements ParametricSearchService {
 
-    private final JsonGridParser parser;
+    /** Key for free-text "details" parameter. */
+    private static final String DETAILS_KEY = "details";
 
+    private static final Pattern DETAILS_FILTER_PATTERN = Pattern.compile("([^\"]+)");
+
+    /**
+     * Constructs the TDK parametric search service.
+     * @param filterConfig YAML-backed filter definitions
+     * @param factory vendor config factory
+     * @param builder shared WebClient.Builder
+     * @param llmHelper LLM helper for free-text filters
+     * @param parser JSON grid parser for structured results
+     * @param mapper shared JSON mapper
+     */
     public TdkParametricSearchService(
-            @Qualifier("tdkGridParser") final JsonGridParser parser,
+            final ParametricFilterConfig filterConfig,
             final VendorConfigFactory factory,
             final WebClient.Builder builder,
             final LLMHelper llmHelper,
-            @Qualifier("scraperObjectMapper") ObjectMapper om
-    ) {
-        super(factory.forVendor("tdk"), builder, llmHelper, parser, om);
-        this.parser = parser;
+            @Qualifier("tdkGridParser") final JsonGridParser parser,
+            @Qualifier("scraperObjectMapper") final ObjectMapper mapper) {
+        super(factory.forVendor("tdk"), builder, llmHelper, parser, mapper);
     }
 
     /**
-     * {@inheritDoc}
+     * Performs a parametric search using exact parameters and optional free text.
+     * @param category main category label
+     * @param subcategory optional subcategory
+     * @param parameters map of parameter key→value or range or collection
+     * @param maxResults maximum rows to return
+     * @return list of row maps matching filters
      */
     @Override
-    public List<Map<String, Object>> searchByParameters(@NonNull final String category,
-                                                        @Nullable final String subcategory,
-                                                        @Nullable final Map<String, Object> parameters,
-                                                        final int maxResults) {
-
-        MultiValueMap<String, String> q = buildQueryParams(category, subcategory, parameters);
-
-        JsonNode root = safeGet(buildUri(
-                getCfg().getBaseUrl(),            // e.g. https://product.tdk.com
-                getCfg().getParametricSearchUrl(),     // e.g. /en/search/productsearch
-                q));
-
-        if (root == null) {
-            return List.of();
-        }
-
-        List<Map<String, Object>> rows = parser.parse(root);
-
-        return rows.size() > maxResults
-                ? rows.subList(0, maxResults)
-                : rows;
-    }
-
-    /**
-     * Assemble TDK query parameters.
-     *
-     * <p>The current public spec (2024‑2025) looks like:
-     * <pre> base‑url + parametric‑path
-     *      ?cat=<category>
-     *      &sub=<subcategory>
-     *      &fn=<filter1>|<filter2>|...</pre>
-     * Each filter string itself is composed as
-     * <pre>parameterName:value1,value2…</pre>
-     * (comma for multiple values, dash “min‑max” for ranges).
-     */
-    private MultiValueMap<String, String> buildQueryParams(
+    public List<Map<String,Object>> searchByParameters(
             final String category,
-            @Nullable final String sub,
-            @Nullable final Map<String, Object> filters) {
-        var q = new LinkedMultiValueMap<String, String>();
+            final String subcategory,
+            final Map<String,Object> parameters,
+            final int maxResults) {
 
-        q.add("cat", category);
-        if (StringUtils.isNotBlank(sub)) {
-            q.add("sub", Objects.requireNonNull(sub).trim());
-        }
+        // Build form data
+        MultiValueMap<String,String> form = buildForm(category, subcategory, parameters, maxResults);
+        URI endpoint = buildUri(getCfg().getBaseUrl(), getCfg().getParametricSearchUrl(), null);
 
-        if (filters != null && !filters.isEmpty()) {
-            q.add("fn", encodeFilters(filters));
-        }
-
-        /* localisation – TDK understands ISO‑lang plus “filter” flag */
-        q.add("lang", "en");
-
-        return q;
+        JsonNode rsp = safePost(endpoint, form);
+        return getParser().parse(rsp).stream()
+                .limit(maxResults)
+                .toList();
     }
 
     /**
-     * Encode caller‑friendly filter map into TDK’s <code>fn</code> string.
+     * Builds the URL-encoded form data for the parametric search,
+     * including free-text "details" via LLM.
      */
-    private String encodeFilters(final Map<String, Object> filters) {
+    private MultiValueMap<String,String> buildForm(
+            final String category,
+            final String subcategory,
+            final Map<String,Object> params,
+            final int maxResults) {
 
-        return filters.entrySet().stream()
-                .map(e -> encodeOne(e.getKey(), e.getValue()))
-                .collect(Collectors.joining("|"));
-    }
+        MultiValueMap<String,String> form = new LinkedMultiValueMap<>();
+        form.add("site",   getSite().get());
+        form.add("charset","UTF-8");
+        form.add("group",  getGroup().get());
+        form.add("design", getDesign().get());
+        form.add("fromsyncsearch","1");
+        form.add("_l", String.valueOf(maxResults));
+        form.add("_p","1");
+        form.add("_c","part_no-part_no");
+        form.add("_d","0");
 
-    /**
-     * Encodes a single filter into Murata’s “scon” syntax, then URL-encodes
-     * per RFC-3986 (preserving “|”).
-     *
-     * @param name   the filter field name
-     * @param rawVal the filter value, which may be:
-     *               <ul>
-     *                 <li>a {@link Map} with keys "min" and/or "max" → "min-max"</li>
-     *                 <li>a {@link Collection} → comma-joined list</li>
-     *                 <li>anything else → {@code toString()}</li>
-     *               </ul>
-     * @return an RFC-3986 encoded string of the form "{@code name:encodedValues}"
-     */
-    private String encodeOne(final String name, final Object rawVal) {
-        String encodedValues = switch (rawVal) {
-            case Map<?, ?> m -> {
-                String min = Objects.toString(m.get("min"), "");
-                String max = Objects.toString(m.get("max"), "");
-                yield min + "-" + max;
+        // category context as a hidden param
+        form.add("category", Optional.ofNullable(category).orElse(""));
+        if (subcategory != null) form.add("sub_category", subcategory);
+
+        // apply structured and free-text filters
+        for (Map.Entry<String,Object> e : params.entrySet()) {
+            String key = e.getKey();
+            Object value = e.getValue();
+
+            if (DETAILS_KEY.equals(key) && value instanceof String text) {
+                // free-text to structured via LLM
+                JsonNode filters = llmHelper.classify(text);
+                Optional.ofNullable(filters)
+                        .filter(JsonNode::isObject)
+                        .ifPresent(obj -> obj.fieldNames()
+                                .forEachRemaining(name -> addScOn(form, name, obj.get(name))));
+            } else {
+                addScOn(form, key, value);
             }
-            case Collection<?> c -> c.stream()
-                    .map(Object::toString)
-                    .collect(Collectors.joining(","));
-            default -> Objects.toString(rawVal, "");
-        };
+        }
+        return form;
+    }
 
-        // Build the raw "name:values" string, then percent-encode (but keep "|" literal)
-        String raw = name + ":" + encodedValues;
-        return URLEncoder
-                .encode(raw, StandardCharsets.UTF_8)
-                .replace("%7C", "|");
+    /**
+     * Encodes a single filter entry as one or more TDK <code>scon</code> query values.
+     */
+    private void addScOn(
+            final MultiValueMap<String,String> form,
+            final String key,
+            final Object rawValue) {
+
+        switch (rawValue) {
+            case null -> {
+            }
+            case Collection<?> list -> list.forEach(v -> form.add("scon", key + ";" + v));
+            case Map<?, ?> range -> {
+                String min = Optional.ofNullable(range.get("min")).map(Object::toString).orElse("");
+                String max = Optional.ofNullable(range.get("max")).map(Object::toString).orElse("");
+                form.add("scon", key + ";" + min + "|" + max);
+            }
+            case JsonNode node when node.isObject() -> {
+                String min = node.path("min").asText("");
+                String max = node.path("max").asText("");
+                form.add("scon", key + ";" + min + "|" + max);
+            }
+            default -> form.add("scon", key + ";" + rawValue.toString());
+        }
     }
 
 }
+
